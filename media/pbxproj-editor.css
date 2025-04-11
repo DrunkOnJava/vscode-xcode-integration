@@ -1,0 +1,205 @@
+:root {
+    --container-padding: 20px;
+    --input-padding-vertical: 6px;
+    --input-padding-horizontal: 4px;
+    --input-margin-vertical: 4px;
+    --input-margin-horizontal: 0;
+}
+
+body {
+    padding: 0;
+    margin: 0;
+    color: var(--vscode-foreground);
+    font-size: var(--vscode-font-size);
+    font-weight: var(--vscode-font-weight);
+    font-family: var(--vscode-font-family);
+    background-color: var(--vscode-editor-background);
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    margin: 8px;
+    padding: 8px;
+    background-color: var(--vscode-sideBar-background);
+    border-radius: 4px;
+}
+
+button {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    padding: 6px 14px;
+    margin: 4px 8px 4px 0;
+    border-radius: 2px;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    cursor: pointer;
+    outline: none;
+}
+
+button:hover {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+button:active {
+    background-color: var(--vscode-button-activeBackground);
+}
+
+.conflict-stats {
+    margin-left: auto;
+    padding: 8px;
+    color: var(--vscode-descriptionForeground);
+}
+
+#conflict-count {
+    font-weight: bold;
+    color: var(--vscode-terminal-ansiRed);
+}
+
+.editor-container {
+    display: flex;
+    height: calc(100vh - 100px);
+    margin: 8px;
+    border: 1px solid var(--vscode-panel-border);
+}
+
+.section-list {
+    flex: 0 0 200px;
+    overflow-y: auto;
+    background-color: var(--vscode-sideBar-background);
+    border-right: 1px solid var(--vscode-panel-border);
+}
+
+.section-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.section-item:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+
+.section-item.has-conflicts {
+    color: var(--vscode-terminal-ansiRed);
+    font-weight: bold;
+}
+
+.editor {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+
+#editor-wrapper {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+}
+
+.conflict-view {
+    flex: 0 0 300px;
+    background-color: var(--vscode-sideBar-background);
+    overflow-y: auto;
+    border-left: 1px solid var(--vscode-panel-border);
+}
+
+.conflict-view h3 {
+    margin: 8px 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.conflict-item {
+    margin: 8px;
+    padding: 8px;
+    background-color: var(--vscode-panel-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+}
+
+.conflict-header {
+    font-weight: bold;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.conflict-actions {
+    display: flex;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.conflict-preview {
+    display: flex;
+    flex-direction: column;
+}
+
+.preview-section {
+    margin: 4px 0;
+    padding: 8px;
+    background-color: var(--vscode-editor-background);
+    border-radius: 2px;
+}
+
+.preview-section h4 {
+    margin: 0 0 8px 0;
+    color: var(--vscode-descriptionForeground);
+}
+
+.preview-section pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--vscode-editor-font-size);
+}
+
+.preview-section.ours h4 {
+    color: var(--vscode-terminal-ansiGreen);
+}
+
+.preview-section.theirs h4 {
+    color: var(--vscode-terminal-ansiBlue);
+}
+
+/* CodeMirror integration styles */
+.CodeMirror {
+    height: 100%;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--vscode-editor-font-size);
+    line-height: var(--vscode-editor-line-height);
+}
+
+.conflict-marker {
+    color: #fff;
+    background-color: var(--vscode-terminal-ansiRed);
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+}
+
+.cm-s-vscode-dark .conflict-start {
+    background-color: rgba(255, 100, 100, 0.2);
+}
+
+.cm-s-vscode-dark .conflict-middle {
+    background-color: rgba(100, 100, 255, 0.2);
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.cm-s-vscode-dark .conflict-end {
+    background-color: rgba(100, 255, 100, 0.2);
+}

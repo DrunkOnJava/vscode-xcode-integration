@@ -1,0 +1,527 @@
+{
+  "name": "vscode-xcode-integration",
+  "displayName": "VSCode Xcode Integration",
+  "description": "Seamless integration between Visual Studio Code and Xcode for Swift development",
+  "version": "0.1.0",
+  "publisher": "griffin",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "Formatters"
+  ],
+  "activationEvents": [
+    "onLanguage:swift",
+    "workspaceContains:**/*.xcodeproj",
+    "workspaceContains:**/*.xcworkspace",
+    "onCommand:vscode-xcode-integration.setupGitHooks",
+    "onCommand:vscode-xcode-integration.resolveConflicts",
+    "onCommand:vscode-xcode-integration.showGitStatus",
+    "onCommand:vscode-xcode-integration.saveProjectState",
+    "onCommand:vscode-xcode-integration.restoreProjectState",
+    "onCommand:vscode-xcode-integration.showStateHistory",
+    "onCommand:vscode-xcode-integration.detectWorkspace",
+    "onCommand:vscode-xcode-integration.selectWorkspaceScheme",
+    "onCommand:vscode-xcode-integration.updateCrossReferences",
+    "onCommand:vscode-xcode-integration.buildDependencyGraph",
+    "onCommand:vscode-xcode-integration.determineBuildOrder"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "vscode-xcode-integration.pbxprojEditor",
+        "displayName": "Xcode Project Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.pbxproj"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vscode-xcode-integration.syncFile",
+        "title": "Xcode: Sync Current File"
+      },
+      {
+        "command": "vscode-xcode-integration.startSelectiveWatcher",
+        "title": "Xcode: Start Selective File Watcher"
+      },
+      {
+        "command": "vscode-xcode-integration.analyzeProject",
+        "title": "Xcode: Analyze Project Dependencies"
+      },
+      {
+        "command": "vscode-xcode-integration.showPerformanceStatus",
+        "title": "Xcode: Show Performance Status"
+      },
+      {
+        "command": "vscode-xcode-integration.monitorPerformance",
+        "title": "Xcode: Monitor Performance"
+      },
+      {
+        "command": "vscode-xcode-integration.configurePerformance",
+        "title": "Xcode: Configure Performance"
+      },
+      {
+        "command": "vscode-xcode-integration.togglePerformanceFeatures",
+        "title": "Xcode: Toggle Performance Features"
+      },
+      {
+        "command": "vscode-xcode-integration.applyPerformanceProfile",
+        "title": "Xcode: Apply Performance Profile"
+      },
+      {
+        "command": "vscode-xcode-integration.syncProject",
+        "title": "Xcode: Sync Entire Project"
+      },
+      {
+        "command": "vscode-xcode-integration.buildProject",
+        "title": "Xcode: Build Project"
+      },
+      {
+        "command": "vscode-xcode-integration.runTests",
+        "title": "Xcode: Run Tests"
+      },
+      {
+        "command": "vscode-xcode-integration.updateDependencies",
+        "title": "Xcode: Update Dependencies"
+      },
+      {
+        "command": "vscode-xcode-integration.showStatus",
+        "title": "Xcode: Show Integration Status"
+      },
+      {
+        "command": "vscode-xcode-integration.scanForSensitiveData",
+        "title": "Xcode: Scan Project for Sensitive Data"
+      },
+      {
+        "command": "vscode-xcode-integration.validateProjectPaths",
+        "title": "Xcode: Validate Project Paths"
+      },
+      {
+        "command": "vscode-xcode-integration.checkPermissions",
+        "title": "Xcode: Check File Permissions"
+      },
+      {
+        "command": "vscode-xcode-integration.checkProjectIntegrity",
+        "title": "Xcode: Check Project Integrity"
+      },
+      {
+        "command": "vscode-xcode-integration.repairProject",
+        "title": "Xcode: Repair Project"
+      },
+      {
+        "command": "vscode-xcode-integration.viewTransactionLog",
+        "title": "Xcode: View Transaction Log"
+      },
+      {
+        "command": "vscode-xcode-integration.setupGitHooks",
+        "title": "Xcode: Set Up Git Hooks"
+      },
+      {
+        "command": "vscode-xcode-integration.resolveConflicts",
+        "title": "Xcode: Resolve Git Conflicts"
+      },
+      {
+        "command": "vscode-xcode-integration.showGitStatus",
+        "title": "Xcode: Show Git Status"
+      },
+      {
+        "command": "vscode-xcode-integration.saveProjectState",
+        "title": "Xcode: Save Project State"
+      },
+      {
+        "command": "vscode-xcode-integration.restoreProjectState",
+        "title": "Xcode: Restore Project State"
+      },
+      {
+        "command": "vscode-xcode-integration.showStateHistory",
+        "title": "Xcode: Show Project State History"
+      },
+      {
+        "command": "vscode-xcode-integration.detectWorkspace",
+        "title": "Xcode: Detect Workspace"
+      },
+      {
+        "command": "vscode-xcode-integration.selectWorkspaceScheme",
+        "title": "Xcode: Select Workspace Scheme"
+      },
+      {
+        "command": "vscode-xcode-integration.updateCrossReferences",
+        "title": "Xcode: Update Cross-Project References"
+      },
+      {
+        "command": "vscode-xcode-integration.buildDependencyGraph",
+        "title": "Xcode: Build Dependency Graph"
+      },
+      {
+        "command": "vscode-xcode-integration.determineBuildOrder",
+        "title": "Xcode: Determine Build Order"
+      }
+    ],
+    "configuration": {
+      "title": "VSCode Xcode Integration",
+      "properties": {
+        "vscode-xcode-integration.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "Relative path to the Xcode project or workspace from the workspace root"
+        },
+        "vscode-xcode-integration.enableAutoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic synchronization with Xcode"
+        },
+        "vscode-xcode-integration.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications for synchronization events"
+        },
+        "vscode-xcode-integration.logLevel": {
+          "type": "string",
+          "enum": ["error", "warn", "info", "debug", "trace"],
+          "default": "info",
+          "description": "Log level for the extension"
+        },
+        "vscode-xcode-integration.watchExclude": {
+          "type": "array",
+          "default": ["**/Pods/**", "**/Carthage/**", "**/DerivedData/**", "**/node_modules/**", "**/.git/**"],
+          "description": "Patterns to exclude from file watching"
+        },
+        "vscode-xcode-integration.debounceDelay": {
+          "type": "number",
+          "default": 1000,
+          "description": "Delay in milliseconds to debounce synchronization operations"
+        },
+        "vscode-xcode-integration.multiProject.autoDetectWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect Xcode workspace when opening a project"
+        },
+        "vscode-xcode-integration.multiProject.updateReferencesOnSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Update cross-project references when syncing files"
+        },
+        "vscode-xcode-integration.multiProject.schemeSelectionMode": {
+          "type": "string",
+          "enum": ["auto", "ask", "manual"],
+          "default": "auto",
+          "description": "How to select schemes in multi-project environment: auto (best guess), ask (prompt), or manual (user selected)"
+        },
+        "vscode-xcode-integration.security.enableSecurityChecks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable security checks for sensitive data and path validation"
+        },
+        "vscode-xcode-integration.security.interactiveMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable interactive mode for security prompts"
+        },
+        "vscode-xcode-integration.security.createBackups": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically create backups before modifying files"
+        },
+        "vscode-xcode-integration.security.checkSensitiveData": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check for sensitive data like API keys in files"
+        },
+        "vscode-xcode-integration.security.validatePaths": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate that operations stay within project boundaries"
+        },
+        "vscode-xcode-integration.security.checkPermissions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check for file permission issues before operations"
+        },
+        "vscode-xcode-integration.security.allowedExternalPaths": {
+          "type": "array",
+          "default": [],
+          "description": "List of external paths that are allowed for operations"
+        },
+        "vscode-xcode-integration.security.securityLogLevel": {
+          "type": "string",
+          "enum": ["ERROR", "WARNING", "INFO", "DEBUG"],
+          "default": "INFO",
+          "description": "Log level for security operations"
+        },
+        "vscode-xcode-integration.security.securityLogFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to security log file (leave empty to disable file logging)"
+        },
+        "vscode-xcode-integration.security.autoFixPermissions": {
+          "type": "string",
+          "enum": ["none", "ask", "auto"],
+          "default": "ask",
+          "description": "How to handle permission issues: none (report only), ask (interactive), or auto (fix automatically)"
+        },
+        "vscode-xcode-integration.errorHandling.enableTransactions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable transaction-based updates for safety"
+        },
+        "vscode-xcode-integration.errorHandling.autoRepair": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically attempt to repair detected issues"
+        },
+        "vscode-xcode-integration.errorHandling.logLevel": {
+          "type": "string",
+          "enum": ["ERROR", "WARNING", "INFO", "DEBUG", "TRACE"],
+          "default": "INFO",
+          "description": "Log level for error handling"
+        },
+        "vscode-xcode-integration.errorHandling.transactionLogFile": {
+          "type": "string",
+          "default": "",
+          "description": "Path to transaction log file (empty for default location)"
+        },
+        "vscode-xcode-integration.errorHandling.autoCommitDelay": {
+          "type": "number",
+          "default": 5000,
+          "description": "Delay in milliseconds before auto-committing transactions"
+        },
+        "vscode-xcode-integration.errorHandling.keepBackupDays": {
+          "type": "number",
+          "default": 7,
+          "description": "Number of days to keep transaction backups"
+        },
+        "vscode-xcode-integration.errorHandling.integrityCheckMode": {
+          "type": "string",
+          "enum": ["minimal", "normal", "detailed"],
+          "default": "normal",
+          "description": "Default verbosity level for integrity checks"
+        },
+        "vscode-xcode-integration.versionControl.autoRepairEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically repair project files after Git operations"
+        },
+        "vscode-xcode-integration.versionControl.stateTrackingEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable project state tracking for rollback and recovery"
+        },
+        "vscode-xcode-integration.versionControl.autoSetupGitHooks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically set up Git hooks when opening a Swift project"
+        },
+        "vscode-xcode-integration.versionControl.mergeStrategy": {
+          "type": "string",
+          "enum": ["automatic", "interactive", "manual"],
+          "default": "interactive",
+          "description": "Strategy for resolving merge conflicts"
+        },
+        "vscode-xcode-integration.versionControl.notifyOnStateChange": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when project state changes"
+        },
+        "vscode-xcode-integration.versionControl.maxStateHistory": {
+          "type": "number",
+          "default": 10,
+          "description": "Maximum number of project states to keep in history"
+        },
+        "vscode-xcode-integration.versionControl.customMergeTools": {
+          "type": "object",
+          "default": {},
+          "description": "Custom merge tools for specific file types"
+        },
+        "vscode-xcode-integration.performance.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable performance optimization features"
+        },
+        "vscode-xcode-integration.performance.useSelectiveWatch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use selective file watching to reduce resource usage"
+        },
+        "vscode-xcode-integration.performance.useThrottling": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use throttling for high-frequency file changes"
+        },
+        "vscode-xcode-integration.performance.useIncrementalUpdates": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use incremental updates for large projects"
+        },
+        "vscode-xcode-integration.performance.updateMode": {
+          "type": "string",
+          "enum": ["smart", "minimal", "full"],
+          "default": "smart",
+          "description": "Update mode for incremental updates: smart (include dependencies), minimal (changed files only), or full (all files)"
+        },
+        "vscode-xcode-integration.performance.batchSize": {
+          "type": "number",
+          "default": 20,
+          "description": "Maximum batch size for file operations"
+        },
+        "vscode-xcode-integration.performance.activeOnlyWatching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Only watch directories with recent activity"
+        },
+        "vscode-xcode-integration.performance.memoryLimit": {
+          "type": "number",
+          "default": 100,
+          "description": "Memory limit in MB for performance processes"
+        },
+        "vscode-xcode-integration.performance.cpuLimit": {
+          "type": "number",
+          "default": 20,
+          "description": "CPU usage limit percentage for performance processes"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "vscode-xcode-integration.syncFile",
+          "when": "editorLangId == swift",
+          "group": "vscode-xcode-integration"
+        },
+        {
+          "command": "vscode-xcode-integration.resolveConflicts",
+          "when": "editorLangId == swift && resourcePath =~ /.*\\.pbxproj$|.*\\.swift$|.*\\.xib$|.*\\.storyboard$|.*\\.xcassets/",
+          "group": "vscode-xcode-integration-vc@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "vscode-xcode-integration.syncFile",
+          "when": "resourceExtname == .swift",
+          "group": "vscode-xcode-integration"
+        },
+        {
+          "command": "vscode-xcode-integration.checkPermissions",
+          "when": "resourceExtname == .swift",
+          "group": "vscode-xcode-integration"
+        },
+        {
+          "command": "vscode-xcode-integration.scanForSensitiveData",
+          "group": "vscode-xcode-integration"
+        },
+        {
+          "command": "vscode-xcode-integration.saveProjectState",
+          "when": "workspaceHasGit",
+          "group": "vscode-xcode-integration-vc@1"
+        },
+        {
+          "command": "vscode-xcode-integration.restoreProjectState",
+          "when": "workspaceHasGit",
+          "group": "vscode-xcode-integration-vc@2"
+        },
+        {
+          "command": "vscode-xcode-integration.resolveConflicts",
+          "when": "workspaceHasGit && resourcePath =~ /.*\\.pbxproj$|.*\\.swift$|.*\\.xib$|.*\\.storyboard$|.*\\.xcassets/",
+          "group": "vscode-xcode-integration-vc@3"
+        },
+        {
+          "command": "vscode-xcode-integration.updateCrossReferences",
+          "when": "resourceExtname == .xcodeproj || resourceExtname == .xcworkspace",
+          "group": "vscode-xcode-integration-multi@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vscode-xcode-integration.startSelectiveWatcher",
+          "when": "resourceExtname == .swift || resourceExtname == .h || resourceExtname == .m || resourceExtname == .mm"
+        },
+        {
+          "command": "vscode-xcode-integration.analyzeProject",
+          "when": "resourceExtname == .swift || resourceExtname == .h || resourceExtname == .m || resourceExtname == .mm"
+        },
+        {
+          "command": "vscode-xcode-integration.showPerformanceStatus"
+        },
+        {
+          "command": "vscode-xcode-integration.monitorPerformance"
+        },
+        {
+          "command": "vscode-xcode-integration.configurePerformance"
+        },
+        {
+          "command": "vscode-xcode-integration.togglePerformanceFeatures"
+        },
+        {
+          "command": "vscode-xcode-integration.applyPerformanceProfile"
+        },
+        {
+          "command": "vscode-xcode-integration.setupGitHooks",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.resolveConflicts",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.showGitStatus",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.saveProjectState",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.restoreProjectState",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.showStateHistory",
+          "when": "workspaceHasGit"
+        },
+        {
+          "command": "vscode-xcode-integration.detectWorkspace",
+          "when": "workspaceContains:**/*.xcworkspace"
+        },
+        {
+          "command": "vscode-xcode-integration.selectWorkspaceScheme",
+          "when": "workspaceContains:**/*.xcworkspace"
+        },
+        {
+          "command": "vscode-xcode-integration.updateCrossReferences",
+          "when": "workspaceContains:**/*.xcworkspace"
+        },
+        {
+          "command": "vscode-xcode-integration.buildDependencyGraph",
+          "when": "workspaceContains:**/*.xcworkspace"
+        },
+        {
+          "command": "vscode-xcode-integration.determineBuildOrder",
+          "when": "workspaceContains:**/*.xcworkspace"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^16.11.7",
+    "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^5.30.0",
+    "@typescript-eslint/parser": "^5.30.0",
+    "eslint": "^8.13.0",
+    "typescript": "^4.7.2"
+  },
+  "dependencies": {
+    "chokidar": "^3.5.3"
+  }
+}

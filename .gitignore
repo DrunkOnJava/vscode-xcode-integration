@@ -1,0 +1,53 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Compiled output
+out/
+dist/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor directories and files
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# TypeScript cache
+*.tsbuildinfo
+
+# VSIX package files
+*.vsix
+
+# Backup files
+src/backup_*/
+src/**/*.bak
+src/**/*.bak.*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Tests
+/coverage
+/.nyc_output
