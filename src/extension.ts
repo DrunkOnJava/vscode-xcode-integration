@@ -8,6 +8,12 @@ import * as performanceOptimization from './performance';
 import { PBXProjEditorProvider } from './pbxproj-editor';
 import { ensureCodeMirror } from './codemirror-loader';
 import { MultiProjectManager } from './multi-project';
+import {
+XcodeProjectProvider, 
+XcodeTargetProvider, 
+XcodeFileProvider,
+    XcodeItem
+} from './xcodeExplorer';
 
 // Status bar items
 let syncStatusItem: vscode.StatusBarItem;
@@ -34,6 +40,115 @@ let multiProjectManager: MultiProjectManager;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('VSCode Xcode Integration is now active');
+    
+    // Create output channel for logging
+    const outputChannel = vscode.window.createOutputChannel('Xcode Integration');
+    
+    // Get workspace folder
+    const workspaceRoot = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
+        ? vscode.workspace.workspaceFolders[0].uri.fsPath
+        : undefined;
+        
+    // Register Tree Data Providers
+    const projectProvider = new XcodeProjectProvider(workspaceRoot);
+    const targetProvider = new XcodeTargetProvider(workspaceRoot);
+    const fileProvider = new XcodeFileProvider(workspaceRoot);
+    
+    // Register views
+    vscode.window.registerTreeDataProvider('xcode-projects', projectProvider);
+    vscode.window.registerTreeDataProvider('xcode-targets', targetProvider);
+    vscode.window.registerTreeDataProvider('xcode-files', fileProvider);
+    
+    // Register refresh commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vscode-xcode-integration.refreshProjects', () => projectProvider.refresh()),
+        vscode.commands.registerCommand('vscode-xcode-integration.refreshTargets', () => targetProvider.refresh()),
+        vscode.commands.registerCommand('vscode-xcode-integration.refreshFiles', () => fileProvider.refresh())
+    );
+    
+    // Register context menu commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vscode-xcode-integration.buildTarget', (item: XcodeItem) => {
+            if (!item) return;
+            vscode.window.showInformationMessage(`Building target: ${item.label}`);
+            outputChannel.appendLine(`Building target: ${item.label}`);
+            
+            // Use existing buildProject logic but for specific target
+            try {
+                const workspaceFolder = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const targetName = item.label;
+                
+                // Create a terminal for building
+                const terminal = vscode.window.createTerminal(`Build: ${targetName}`);
+                terminal.sendText(`cd "${workspaceFolder}" && xcodebuild -target "${targetName}" build`);
+                terminal.show();
+            } catch (err) {
+                const errorMessage = `Error building target: ${err}`;
+                outputChannel.appendLine(errorMessage);
+                vscode.window.showErrorMessage(errorMessage);
+            }
+        }),
+        
+        vscode.commands.registerCommand('vscode-xcode-integration.runScheme', (item: XcodeItem) => {
+            if (!item) return;
+            vscode.window.showInformationMessage(`Running scheme: ${item.label}`);
+            outputChannel.appendLine(`Running scheme: ${item.label}`);
+            
+            // Run the scheme using xcodebuild
+            try {
+                const workspaceFolder = vscode.workspace.workspaceFolders![0].uri.fsPath;
+                const schemeName = item.label;
+                
+                // Create a terminal for running the scheme
+                const terminal = vscode.window.createTerminal(`Run: ${schemeName}`);
+                terminal.sendText(`cd "${workspaceFolder}" && xcodebuild -scheme "${schemeName}" build run`);
+                terminal.show();
+            } catch (err) {
+                const errorMessage = `Error running scheme: ${err}`;
+                outputChannel.appendLine(errorMessage);
+                vscode.window.showErrorMessage(errorMessage);
+            }
+        }),
+        
+        vscode.commands.registerCommand('vscode-xcode-integration.openProject', (item: XcodeItem) => {
+            if (!item || !item.filePath) return;
+            outputChannel.appendLine(`Opening ${item.label} in Xcode: ${item.filePath}`);
+            
+            try {
+                // Open in Xcode
+                const cp = require('child_process');
+                cp.exec(`open "${item.filePath}"`);
+                vscode.window.showInformationMessage(`Opening ${item.label} in Xcode`);
+            } catch (err) {
+                const errorMessage = `Error opening project in Xcode: ${err}`;
+                outputChannel.appendLine(errorMessage);
+                vscode.window.showErrorMessage(errorMessage);
+            }
+        })
+    );
+
+        // Set up auto-refresh for explorer if enabled
+    const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+    if (config.get<boolean>('autoRefreshExplorer', true)) {
+        const fileWatcher = vscode.workspace.createFileSystemWatcher(
+            '**/*.{swift,h,m,xcodeproj,xcworkspace}',
+            false, false, false
+        );
+        
+        // Debounce to avoid multiple refreshes
+        const debouncedRefresh = debounce(() => {
+            projectProvider.refresh();
+            targetProvider.refresh();
+            fileProvider.refresh();
+        }, config.get<number>('debounceDelay', 1000));
+        
+        fileWatcher.onDidChange(debouncedRefresh);
+        fileWatcher.onDidCreate(debouncedRefresh);
+        fileWatcher.onDidDelete(debouncedRefresh);
+        
+        context.subscriptions.push(fileWatcher);
+        outputChannel.appendLine('Xcode Explorer auto-refresh enabled');
+    }
 
     // Initialize status bar items
     syncStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -60,9 +175,6 @@ export function activate(context: vscode.ExtensionContext) {
     transactionStatusItem.tooltip = "Transaction Status";
     transactionStatusItem.command = 'vscode-xcode-integration.viewTransactionLog';
     transactionStatusItem.show();
-
-    // Create output channel for logging
-    const outputChannel = vscode.window.createOutputChannel('Xcode Integration');
 
     // Initialize multi-project manager
     multiProjectManager = new MultiProjectManager(context);

@@ -2,8 +2,12 @@
   "name": "vscode-xcode-integration",
   "displayName": "VSCode Xcode Integration",
   "description": "Seamless integration between Visual Studio Code and Xcode for Swift development",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "publisher": "griffin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drunkonjava/vscode-xcode-integration.git"
+  },
   "engines": {
     "vscode": "^1.60.0"
   },
@@ -30,6 +34,31 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "xcode-explorer",
+          "title": "Xcode Integration",
+          "icon": "media/xcode-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "xcode-explorer": [
+        {
+          "id": "xcode-projects",
+          "name": "Projects"
+        },
+        {
+          "id": "xcode-targets",
+          "name": "Targets & Schemes"
+        },
+        {
+          "id": "xcode-files",
+          "name": "Files"
+        }
+      ]
+    },
     "customEditors": [
       {
         "viewType": "vscode-xcode-integration.pbxprojEditor",
@@ -43,6 +72,36 @@
       }
     ],
     "commands": [
+      {
+        "command": "vscode-xcode-integration.buildTarget",
+        "title": "Build Target",
+        "icon": "$(play)"
+      },
+      {
+        "command": "vscode-xcode-integration.runScheme",
+        "title": "Run Scheme",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "vscode-xcode-integration.openProject",
+        "title": "Open in Xcode",
+        "icon": "$(external-link)"
+      },
+      {
+        "command": "vscode-xcode-integration.refreshProjects",
+        "title": "Xcode: Refresh Projects",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vscode-xcode-integration.refreshTargets",
+        "title": "Xcode: Refresh Targets & Schemes",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "vscode-xcode-integration.refreshFiles",
+        "title": "Xcode: Refresh Files",
+        "icon": "$(refresh)"
+      },
       {
         "command": "vscode-xcode-integration.syncFile",
         "title": "Xcode: Sync Current File"
@@ -167,6 +226,11 @@
     "configuration": {
       "title": "VSCode Xcode Integration",
       "properties": {
+        "vscode-xcode-integration.autoRefreshExplorer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto refresh the Xcode Explorer when files change"
+        },
         "vscode-xcode-integration.projectPath": {
           "type": "string",
           "default": "",
@@ -388,6 +452,40 @@
       }
     },
     "menus": {
+      "view/item/context": [
+        {
+          "command": "vscode-xcode-integration.buildTarget",
+          "when": "view == xcode-targets && viewItem == target",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-xcode-integration.runScheme",
+          "when": "view == xcode-targets && viewItem == scheme",
+          "group": "inline"
+        },
+        {
+          "command": "vscode-xcode-integration.openProject",
+          "when": "view == xcode-projects && viewItem == project",
+          "group": "inline"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "vscode-xcode-integration.refreshProjects",
+          "when": "view == xcode-projects",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-xcode-integration.refreshTargets",
+          "when": "view == xcode-targets",
+          "group": "navigation"
+        },
+        {
+          "command": "vscode-xcode-integration.refreshFiles",
+          "when": "view == xcode-files",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "command": "vscode-xcode-integration.syncFile",
@@ -511,7 +609,9 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "package": "vsce package",
+    "install-local": "vsce package && code --install-extension vscode-xcode-integration-0.1.0.vsix"
   },
   "devDependencies": {
     "@types/node": "^16.11.7",
@@ -523,5 +623,10 @@
   },
   "dependencies": {
     "chokidar": "^3.5.3"
-  }
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/griffin/vscode-xcode-integration/issues"
+  },
+  "homepage": "https://github.com/griffin/vscode-xcode-integration#readme"
 }
