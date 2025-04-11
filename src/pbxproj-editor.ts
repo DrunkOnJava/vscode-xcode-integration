@@ -1,165 +1,226 @@
 import * as vscode from 'vscode';
-import * as cp from 'child_process';
-import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
+import * as path from 'path';
 
 /**
- * Provider for custom editor for Xcode project files
+ * Implementation of the Xcode project (pbxproj) file editor
  */
 export class PBXProjEditorProvider implements vscode.CustomTextEditorProvider {
-    
     /**
-     * Register the editor provider
+     * Register the custom editor provider
+     * @param context Extension context
+     * @returns Disposable for the registered provider
      */
     public static register(context: vscode.ExtensionContext): vscode.Disposable {
+        // Register the custom editor provider
         const provider = new PBXProjEditorProvider(context);
-        return vscode.window.registerCustomEditorProvider('vscode-xcode-integration.pbxprojEditor', provider);
-    }
-    
-    private readonly outputChannel: vscode.OutputChannel;
-    
-    constructor(
-        private readonly context: vscode.ExtensionContext
-    ) {
-        this.outputChannel = vscode.window.createOutputChannel('PBXProj Editor');
+        
+        return vscode.window.registerCustomEditorProvider(
+            PBXProjEditorProvider.viewType,
+            provider,
+            {
+                webviewOptions: {
+                    retainContextWhenHidden: true
+                },
+                supportsMultipleEditorsPerDocument: false
+            }
+        );
     }
     
     /**
-     * Called when our custom editor is opened
+     * Custom editor view type
      */
-    async resolveCustomTextEditor(
+    private static readonly viewType = 'vscode-xcode-integration.pbxprojEditor';
+    
+    /**
+     * Constructor
+     * @param context Extension context
+     */
+    constructor(private readonly context: vscode.ExtensionContext) {}
+    
+    /**
+     * Resolve a custom editor for a given text document
+     * @param document The document to create a custom editor for
+     * @param webviewPanel The webview panel used to display the editor UI
+     * @param token A cancellation token
+     */
+    public async resolveCustomTextEditor(
         document: vscode.TextDocument,
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
-        // Setup webview
+        // Set up the webview
         webviewPanel.webview.options = {
             enableScripts: true,
             localResourceRoots: [
-                vscode.Uri.file(path.join(this.context.extensionPath, 'media'))
+                vscode.Uri.file(path.join(this.context.extensionPath, 'resources'))
             ]
         };
         
-        // Initialize HTML content
-        webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview);
+        // Initialize the webview content
+        webviewPanel.webview.html = this.getHtmlForWebview(webviewPanel.webview, document);
         
-        // Set up document-webview communication
-        const updateWebview = () => {
-            webviewPanel.webview.postMessage({
-                command: 'update',
-                text: document.getText()
-            });
-        };
+        // Set up message handling
+        this.setupMessageHandling(document, webviewPanel);
         
-        // Update webview when document is first opened
-        updateWebview();
-        
-        // Update webview when document changes in the editor
+        // Handle document changes
         const changeDocumentSubscription = vscode.workspace.onDidChangeTextDocument(e => {
             if (e.document.uri.toString() === document.uri.toString()) {
-                updateWebview();
+                this.updateWebview(document, webviewPanel);
             }
         });
         
-        // Clean up event listeners when the editor is closed
+        // Clean up event listener when the editor is closed
         webviewPanel.onDidDispose(() => {
             changeDocumentSubscription.dispose();
         });
         
-        // Handle messages from the webview
-        webviewPanel.webview.onDidReceiveMessage(message => {
-            switch (message.command) {
-                case 'save':
-                    this.saveDocument(document, message.text);
-                    return;
+        // Initialize with document content
+        this.updateWebview(document, webviewPanel);
+    }
+    
+    /**
+     * Get the HTML for the webview
+     * @param webview The webview to create content for
+     * @param document The document being edited
+     * @returns HTML string for the webview
+     */
+    private getHtmlForWebview(webview: vscode.Webview, document: vscode.TextDocument): string {
+        // Get resource URIs
+        const codemirrorJsUri = webview.asWebviewUri(
+            vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'codemirror', 'codemirror.js'))
+        );
+        
+        const codemirrorCssUri = webview.asWebviewUri(
+            vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'codemirror', 'codemirror.css'))
+        );
+        
+        const javascriptModeUri = webview.asWebviewUri(
+            vscode.Uri.file(
+                path.join(this.context.extensionPath, 'resources', 'codemirror', 'mode', 'javascript', 'javascript.js')
+            )
+        );
+        
+        const editorJsUri = webview.asWebviewUri(
+            vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'pbxproj-editor.js'))
+        );
+        
+        const editorCssUri = webview.asWebviewUri(
+            vscode.Uri.file(path.join(this.context.extensionPath, 'resources', 'pbxproj-editor.css'))
+        );
+        
+        // Get the initial content
+        const initialContent = document.getText();
+        
+        // Build the HTML
+        return /* html */ `
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>PBXProj Editor</title>
+                
+                <link href="${codemirrorCssUri}" rel="stylesheet">
+                <link href="${editorCssUri}" rel="stylesheet">
+                
+                <script src="${codemirrorJsUri}"></script>
+                <script src="${javascriptModeUri}"></script>
+            </head>
+            <body>
+                <div class="editor-container">
+                    <div class="toolbar">
+                        <button id="btn-format">Format</button>
+                        <button id="btn-add-file">Add File</button>
+                        <button id="btn-remove-file">Remove File</button>
+                        <select id="select-view-mode">
+                            <option value="tree">Tree View</option>
+                            <option value="text">Text View</option>
+                        </select>
+                    </div>
                     
-                case 'analyzeConflicts':
-                    this.analyzeConflicts(document, webviewPanel.webview);
-                    return;
-            }
+                    <div class="editor-panels">
+                        <div id="tree-view" class="panel">
+                            <div class="tree-container"></div>
+                        </div>
+                        
+                        <div id="text-view" class="panel">
+                            <textarea id="editor"></textarea>
+                        </div>
+                    </div>
+                </div>
+                
+                <script>
+                    // Initial content from the document
+                    const initialContent = ${JSON.stringify(initialContent)};
+                </script>
+                
+                <script src="${editorJsUri}"></script>
+            </body>
+            </html>
+        `;
+    }
+    
+    /**
+     * Set up message handling between the webview and extension
+     * @param document The document being edited
+     * @param webviewPanel The webview panel
+     */
+    private setupMessageHandling(document: vscode.TextDocument, webviewPanel: vscode.WebviewPanel): void {
+        webviewPanel.webview.onDidReceiveMessage(
+            async (message) => {
+                switch (message.type) {
+                    case 'update':
+                        this.updateTextDocument(document, message.content);
+                        break;
+                        
+                    case 'format':
+                        await this.formatDocument(document);
+                        break;
+                        
+                    case 'addFile':
+                        await this.addFile(document, message.filePath);
+                        break;
+                        
+                    case 'removeFile':
+                        await this.removeFile(document, message.fileId);
+                        break;
+                        
+                    case 'error':
+                        vscode.window.showErrorMessage(message.message);
+                        break;
+                }
+            },
+            undefined,
+            this.context.subscriptions
+        );
+    }
+    
+    /**
+     * Update the webview with the current document content
+     * @param document The document being edited
+     * @param webviewPanel The webview panel
+     */
+    private updateWebview(document: vscode.TextDocument, webviewPanel: vscode.WebviewPanel): void {
+        webviewPanel.webview.postMessage({
+            type: 'update',
+            content: document.getText()
         });
     }
     
     /**
-     * Get the webview HTML
+     * Update the text document with new content
+     * @param document The document to update
+     * @param content The new content
      */
-    private getHtmlForWebview(webview: vscode.Webview): string {
-        // Get URIs for scripts and CSS
-        const scriptUri = webview.asWebviewUri(
-            vscode.Uri.file(path.join(this.context.extensionPath, 'media', 'pbxproj-editor.js'))
-        );
-        const styleUri = webview.asWebviewUri(
-            vscode.Uri.file(path.join(this.context.extensionPath, 'media', 'pbxproj-editor.css'))
-        );
-        const codemirrorCssUri = webview.asWebviewUri(
-            vscode.Uri.file(path.join(this.context.extensionPath, 'media', 'codemirror.css'))
-        );
-        const codemirrorJsUri = webview.asWebviewUri(
-            vscode.Uri.file(path.join(this.context.extensionPath, 'media', 'codemirror.js'))
-        );
-        
-        // Use a nonce to allow only specific scripts to be run
-        const nonce = this.getNonce();
-        
-        return /* html */`
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            
-            <!-- Use CSP to restrict script execution -->
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
-            
-            <link href="${styleUri}" rel="stylesheet">
-            <link href="${codemirrorCssUri}" rel="stylesheet">
-            <title>PBXProj Editor</title>
-        </head>
-        <body>
-            <!-- Control panel -->
-            <div class="controls">
-                <button id="analyze-conflicts">Analyze Conflicts</button>
-                <button id="resolve-all">Resolve All</button>
-                <div class="conflict-stats">
-                    <span id="conflict-count">0</span> conflicts found
-                </div>
-            </div>
-            
-            <!-- Main editor container -->
-            <div class="editor-container">
-                <!-- Section list sidebar -->
-                <div class="section-list"></div>
-                
-                <!-- Editor main area -->
-                <div class="editor">
-                    <div id="editor-wrapper"></div>
-                </div>
-                
-                <!-- Conflict viewer sidebar -->
-                <div class="conflict-view">
-                    <h3>Conflicts</h3>
-                    <div id="conflicts-list"></div>
-                </div>
-            </div>
-            
-            <!-- Scripts -->
-            <script nonce="${nonce}" src="${codemirrorJsUri}"></script>
-            <script nonce="${nonce}" src="${scriptUri}"></script>
-        </body>
-        </html>`;
-    }
-    
-    /**
-     * Save the document
-     */
-    private saveDocument(document: vscode.TextDocument, text: string): void {
+    private updateTextDocument(document: vscode.TextDocument, content: string): void {
         const edit = new vscode.WorkspaceEdit();
         
+        // Replace the entire document
         edit.replace(
             document.uri,
             new vscode.Range(0, 0, document.lineCount, 0),
-            text
+            content
         );
         
         // Apply the edit
@@ -167,109 +228,52 @@ export class PBXProjEditorProvider implements vscode.CustomTextEditorProvider {
     }
     
     /**
-     * Analyze conflicts in the document
+     * Format the document
+     * @param document The document to format
      */
-    private async analyzeConflicts(document: vscode.TextDocument, webview: vscode.Webview): Promise<void> {
+    private async formatDocument(document: vscode.TextDocument): Promise<void> {
         try {
-            // Get workspace folder
-            const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-            if (!workspaceFolder) {
-                throw new Error('No workspace folder found');
-            }
-            
-            // Get the conflict analyzer script path
-            const scriptPath = path.join(
-                workspaceFolder.uri.fsPath,
-                'scripts',
-                'version_control',
-                'merge_tools',
-                'pbxproj_analyzer.sh'
-            );
-            
-            // Check if the script exists
-            if (!fs.existsSync(scriptPath)) {
-                throw new Error(`Conflict analyzer script not found: ${scriptPath}`);
-            }
-            
-            // Create a temporary file with the document content
-            const tempFile = path.join(os.tmpdir(), `pbxproj-${Date.now()}.pbxproj`);
-            fs.writeFileSync(tempFile, document.getText());
-            
-            try {
-                // Run the analyzer script
-                const process = cp.spawn(scriptPath, [tempFile], {
-                    cwd: workspaceFolder.uri.fsPath,
-                    stdio: 'pipe',
-                    shell: true
-                });
-                
-                // Collect stdout data
-                let stdout = '';
-                let stderr = '';
-                
-                process.stdout.on('data', (data) => {
-                    stdout += data.toString();
-                });
-                
-                process.stderr.on('data', (data) => {
-                    stderr += data.toString();
-                });
-                
-                // Handle process completion
-                await new Promise<void>((resolve, reject) => {
-                    process.on('close', (code) => {
-                        if (code === 0) {
-                            resolve();
-                        } else {
-                            reject(new Error(`Process exited with code ${code}: ${stderr}`));
-                        }
-                    });
-                    
-                    process.on('error', reject);
-                });
-                
-                try {
-                    // Parse the analysis results
-                    const conflictData = JSON.parse(stdout);
-                    
-                    // Send results to webview
-                    webview.postMessage({
-                        command: 'setConflicts',
-                        conflicts: conflictData
-                    });
-                    
-                    // Log conflicts found
-                    const conflictCount = conflictData.hasConflicts ? conflictData.conflicts.length : 0;
-                    this.outputChannel.appendLine(`Found ${conflictCount} conflicts in the file`);
-                } catch (parseError) {
-                    this.outputChannel.appendLine(`Error parsing analyzer output: ${parseError}`);
-                    this.outputChannel.appendLine(`Output: ${stdout}`);
-                    
-                    throw new Error(`Failed to parse analyzer output: ${parseError}`);
-                }
-            } catch (processError) {
-                throw new Error(`Error executing analyzer script: ${processError}`);
-            } finally {
-                // Clean up temp file
-                if (fs.existsSync(tempFile)) {
-                    fs.unlinkSync(tempFile);
-                }
-            }
+            // In a real implementation, this would parse and format the pbxproj file
+            // For this placeholder, we'll just use the built-in formatter
+            await vscode.commands.executeCommand('editor.action.formatDocument', document.uri);
         } catch (error) {
-            this.outputChannel.appendLine(`Error analyzing conflicts: ${error}`);
-            vscode.window.showErrorMessage(`Failed to analyze conflicts: ${error}`);
+            vscode.window.showErrorMessage(`Error formatting document: ${error}`);
         }
     }
     
     /**
-     * Generate a nonce string
+     * Add a file to the Xcode project
+     * @param document The pbxproj document
+     * @param filePath The path to the file to add
      */
-    private getNonce(): string {
-        let text = '';
-        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        for (let i = 0; i < 32; i++) {
-            text += possible.charAt(Math.floor(Math.random() * possible.length));
+    private async addFile(document: vscode.TextDocument, filePath: string): Promise<void> {
+        try {
+            // In a real implementation, this would parse the pbxproj and add the file
+            // For this placeholder, we'll just show a message
+            vscode.window.showInformationMessage(`Adding file to project: ${filePath}`);
+            
+            // Show a notification that this is just a placeholder
+            vscode.window.showInformationMessage('This is a placeholder implementation. File was not actually added to the project.');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Error adding file: ${error}`);
         }
-        return text;
+    }
+    
+    /**
+     * Remove a file from the Xcode project
+     * @param document The pbxproj document
+     * @param fileId The ID of the file to remove
+     */
+    private async removeFile(document: vscode.TextDocument, fileId: string): Promise<void> {
+        try {
+            // In a real implementation, this would parse the pbxproj and remove the file
+            // For this placeholder, we'll just show a message
+            vscode.window.showInformationMessage(`Removing file from project: ${fileId}`);
+            
+            // Show a notification that this is just a placeholder
+            vscode.window.showInformationMessage('This is a placeholder implementation. File was not actually removed from the project.');
+        } catch (error) {
+            vscode.window.showErrorMessage(`Error removing file: ${error}`);
+        }
     }
 }

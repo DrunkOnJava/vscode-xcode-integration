@@ -1,576 +1,606 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import * as fs from 'fs';
-import * as cp from 'child_process';
-// @ts-ignore - Used in other files or for future use
-// @ts-ignore - Used in other files or for future use
-import { debounce } from './utils';
+import * as path from 'path';
+import * as os from 'os';
 
-// Terminal for performance monitoring
-let performanceTerminal: vscode.Terminal | undefined;
+// Active resources
+let outputChannel: vscode.OutputChannel | undefined;
+let isInitialized = false;
+let performanceInterval: NodeJS.Timeout | undefined;
 
-// Status bar item for performance
-let performanceStatusItem: vscode.StatusBarItem;
+// Performance metrics
+interface PerformanceMetrics {
+    cpuUsage: number;
+    memoryUsage: number;
+    fileCount: number;
+    lastRefresh: Date;
+}
+
+let currentMetrics: PerformanceMetrics = {
+    cpuUsage: 0,
+    memoryUsage: 0,
+    fileCount: 0,
+    lastRefresh: new Date()
+};
 
 /**
- * Initialize performance optimization features
+ * Initialize performance monitoring
  * @param context Extension context
- * @param outputChannel Output channel for logging
+ * @param channel Output channel for logging
  */
-export function initialize(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel): void {
-    // Create status bar item
-    performanceStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 96);
-    performanceStatusItem.text = "$(dashboard) Perf: Loading...";
-    performanceStatusItem.tooltip = "Xcode Integration Performance Status";
-    performanceStatusItem.command = 'vscode-xcode-integration.showPerformanceStatus';
-    performanceStatusItem.show();
-
+export function initialize(context: vscode.ExtensionContext, channel: vscode.OutputChannel): void {
+    outputChannel = channel;
+    
     // Register commands
-    context.subscriptions.push(
-        vscode.commands.registerCommand('vscode-xcode-integration.startSelectiveWatcher', () => {
-            startSelectiveWatcher(outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.analyzeProject', () => {
-            analyzeProject(outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.showPerformanceStatus', () => {
-            showPerformanceStatus(outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.monitorPerformance', () => {
-            monitorPerformance(outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.configurePerformance', () => {
-            configurePerformance(outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.applyPerformanceProfile', (profile: string) => {
-            applyPerformanceProfile(profile, outputChannel);
-        }),
-        vscode.commands.registerCommand('vscode-xcode-integration.togglePerformanceFeatures', () => {
-            togglePerformanceFeatures(outputChannel);
-        })
-    );
-
+    registerCommands(context);
+    
+    // Check if performance monitoring is enabled
+    const config = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+    const enableMonitoring = config.get<boolean>('enableMonitoring', false);
+    
+    if (enableMonitoring) {
+        startMonitoring();
+    }
+    
     // Listen for configuration changes
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('vscode-xcode-integration')) {
-                updatePerformanceSettings(outputChannel);
+            if (e.affectsConfiguration('vscode-xcode-integration.performance.enableMonitoring')) {
+                const newConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+                const enableMonitoring = newConfig.get<boolean>('enableMonitoring', false);
+                
+                if (enableMonitoring) {
+                    startMonitoring();
+                } else {
+                    stopMonitoring();
+                }
             }
         })
     );
-
-    // Check performance status and update
-    checkPerformanceStatus(outputChannel);
+    
+    isInitialized = true;
+    outputChannel.appendLine('Performance optimization initialized');
 }
 
 /**
- * Dispose performance resources
+ * Register performance-related commands
+ * @param context Extension context
+ */
+function registerCommands(context: vscode.ExtensionContext): void {
+    // Register a command to optimize the workspace
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vscode-xcode-integration.optimizeWorkspace', async () => {
+            await optimizeWorkspace();
+        })
+    );
+    
+    // Register a command to show performance metrics
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vscode-xcode-integration.showPerformanceMetrics', () => {
+            showPerformanceMetrics();
+        })
+    );
+    
+    // Register a command to clear the cache
+    context.subscriptions.push(
+        vscode.commands.registerCommand('vscode-xcode-integration.clearCache', async () => {
+            await clearCache();
+        })
+    );
+}
+
+/**
+ * Start performance monitoring
+ */
+function startMonitoring(): void {
+    if (performanceInterval) {
+        // Already monitoring
+        return;
+    }
+    
+    // Get the monitoring interval from configuration
+    const config = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+    const intervalMs = config.get<number>('monitoringIntervalMs', 60000);
+    
+    // Start periodic monitoring
+    performanceInterval = setInterval(async () => {
+        await refreshPerformanceMetrics();
+    }, intervalMs);
+    
+    // Initial refresh
+    refreshPerformanceMetrics().catch(error => {
+        outputChannel?.appendLine(`Error refreshing performance metrics: ${error}`);
+    });
+    
+    outputChannel?.appendLine('Performance monitoring started');
+}
+
+/**
+ * Stop performance monitoring
+ */
+function stopMonitoring(): void {
+    if (performanceInterval) {
+        clearInterval(performanceInterval);
+        performanceInterval = undefined;
+        outputChannel?.appendLine('Performance monitoring stopped');
+    }
+}
+
+/**
+ * Refresh performance metrics
+ */
+async function refreshPerformanceMetrics(): Promise<void> {
+    try {
+        // Get CPU usage
+        const cpuUsage = await getCpuUsage();
+        
+        // Get memory usage
+        const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024; // MB
+        
+        // Get file count (if workspace is available)
+        let fileCount = 0;
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            fileCount = await getFileCount(vscode.workspace.workspaceFolders[0].uri.fsPath);
+        }
+        
+        // Update metrics
+        currentMetrics = {
+            cpuUsage,
+            memoryUsage,
+            fileCount,
+            lastRefresh: new Date()
+        };
+        
+        // Log metrics
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+        const logMetrics = config.get<boolean>('logMetrics', false);
+        
+        if (logMetrics) {
+            outputChannel?.appendLine(`Performance metrics:
+- CPU Usage: ${cpuUsage.toFixed(2)}%
+- Memory Usage: ${memoryUsage.toFixed(2)} MB
+- File Count: ${fileCount}
+- Last Refresh: ${currentMetrics.lastRefresh.toLocaleString()}`);
+        }
+        
+        // Check for high resource usage
+        const cpuThreshold = config.get<number>('cpuUsageThreshold', 80);
+        const memoryThreshold = config.get<number>('memoryUsageThreshold', 1000);
+        
+        if (cpuUsage > cpuThreshold || memoryUsage > memoryThreshold) {
+            outputChannel?.appendLine(`High resource usage detected:
+- CPU Usage: ${cpuUsage.toFixed(2)}% (threshold: ${cpuThreshold}%)
+- Memory Usage: ${memoryUsage.toFixed(2)} MB (threshold: ${memoryThreshold} MB)`);
+            
+            // Show a notification if configured
+            if (config.get<boolean>('showResourceWarnings', true)) {
+                vscode.window.showWarningMessage(
+                    `High resource usage detected (CPU: ${cpuUsage.toFixed(2)}%, Memory: ${memoryUsage.toFixed(2)} MB)`,
+                    'Optimize Now',
+                    'Dismiss'
+                ).then(selection => {
+                    if (selection === 'Optimize Now') {
+                        optimizeWorkspace();
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        outputChannel?.appendLine(`Error refreshing performance metrics: ${error}`);
+    }
+}
+
+/**
+ * Get CPU usage
+ * @returns Promise resolving to the CPU usage percentage
+ */
+async function getCpuUsage(): Promise<number> {
+    return new Promise<number>((resolve) => {
+        try {
+            const cpus = os.cpus();
+            
+            // Calculate average CPU usage across all cores
+            let totalUsage = 0;
+            
+            for (const cpu of cpus) {
+                const total = Object.values(cpu.times).reduce((a, b) => a + b, 0);
+                const idle = cpu.times.idle;
+                
+                const usage = 100 - (idle / total) * 100;
+                totalUsage += usage;
+            }
+            
+            const averageUsage = totalUsage / cpus.length;
+            resolve(averageUsage);
+        } catch (error) {
+            outputChannel?.appendLine(`Error getting CPU usage: ${error}`);
+            resolve(0);
+        }
+    });
+}
+
+/**
+ * Get the number of files in a directory (recursive)
+ * @param directory The directory to count files in
+ * @returns Promise resolving to the file count
+ */
+async function getFileCount(directory: string): Promise<number> {
+    try {
+        let count = 0;
+        
+        // Get exclusion patterns from settings
+        const config = vscode.workspace.getConfiguration('files', vscode.Uri.file(directory));
+        const excludePatterns = config.get<{ [key: string]: boolean }>('exclude', {});
+        
+        // Function to check if a path matches any exclude pattern
+        const isExcluded = (filePath: string): boolean => {
+            const relativePath = path.relative(directory, filePath);
+            
+            for (const pattern in excludePatterns) {
+                if (excludePatterns[pattern]) {
+                    const regexPattern = pattern
+                        .replace(/\./g, '\\.')
+                        .replace(/\*\*/g, '.*')
+                        .replace(/\*/g, '[^/]*')
+                        .replace(/\?/g, '[^/]');
+                    
+                    const regex = new RegExp(`^${regexPattern}$`, 'i');
+                    
+                    if (regex.test(relativePath)) {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        };
+        
+        // Recursive function to count files
+        const countFiles = async (dir: string): Promise<void> => {
+            if (isExcluded(dir)) {
+                return;
+            }
+            
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                
+                if (entry.isDirectory()) {
+                    await countFiles(fullPath);
+                } else if (!isExcluded(fullPath)) {
+                    count++;
+                }
+            }
+        };
+        
+        await countFiles(directory);
+        return count;
+    } catch (error) {
+        outputChannel?.appendLine(`Error counting files: ${error}`);
+        return 0;
+    }
+}
+
+/**
+ * Optimize the workspace for better performance
+ */
+async function optimizeWorkspace(): Promise<void> {
+    outputChannel?.appendLine('Optimizing workspace...');
+    
+    try {
+        // Show progress indicator
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: 'Optimizing workspace',
+            cancellable: true
+        }, async (progress, token) => {
+            // Report initial progress
+            progress.report({ increment: 0, message: 'Analyzing workspace...' });
+            
+            if (token.isCancellationRequested) {
+                return;
+            }
+            
+            // Clear cache
+            progress.report({ increment: 20, message: 'Clearing cache...' });
+            await clearCache();
+            
+            if (token.isCancellationRequested) {
+                return;
+            }
+            
+            // Optimize file watchers
+            progress.report({ increment: 20, message: 'Optimizing file watchers...' });
+            await optimizeFileWatchers();
+            
+            if (token.isCancellationRequested) {
+                return;
+            }
+            
+            // Optimize search exclude patterns
+            progress.report({ increment: 20, message: 'Optimizing search exclude patterns...' });
+            await optimizeSearchExcludes();
+            
+            if (token.isCancellationRequested) {
+                return;
+            }
+            
+            // Optimize editor settings
+            progress.report({ increment: 20, message: 'Optimizing editor settings...' });
+            await optimizeEditorSettings();
+            
+            if (token.isCancellationRequested) {
+                return;
+            }
+            
+            // Final progress
+            progress.report({ increment: 20, message: 'Optimization complete' });
+            
+            // Refresh performance metrics
+            await refreshPerformanceMetrics();
+        });
+        
+        // Show success message
+        vscode.window.showInformationMessage('Workspace optimization complete');
+    } catch (error) {
+        outputChannel?.appendLine(`Error optimizing workspace: ${error}`);
+        vscode.window.showErrorMessage(`Error optimizing workspace: ${error}`);
+    }
+}
+
+/**
+ * Clear the extension cache
+ */
+async function clearCache(): Promise<void> {
+    try {
+        // Get cache directory
+        const cacheDir = getCacheDirectory();
+        
+        // Check if cache directory exists
+        if (await pathExists(cacheDir)) {
+            // Clear cache files
+            const entries = await fs.promises.readdir(cacheDir);
+            
+            for (const entry of entries) {
+                const fullPath = path.join(cacheDir, entry);
+                
+                try {
+                    const stats = await fs.promises.stat(fullPath);
+                    
+                    if (stats.isDirectory()) {
+                        await deleteDirectory(fullPath);
+                    } else {
+                        await fs.promises.unlink(fullPath);
+                    }
+                } catch (error) {
+                    outputChannel?.appendLine(`Error deleting cache entry ${entry}: ${error}`);
+                }
+            }
+            
+            outputChannel?.appendLine('Cache cleared');
+        } else {
+            // Create cache directory
+            await fs.promises.mkdir(cacheDir, { recursive: true });
+            outputChannel?.appendLine('Cache directory created');
+        }
+    } catch (error) {
+        outputChannel?.appendLine(`Error clearing cache: ${error}`);
+        throw error;
+    }
+}
+
+/**
+ * Optimize file watchers
+ */
+async function optimizeFileWatchers(): Promise<void> {
+    try {
+        // Get file watcher configuration
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        
+        // Update file watcher exclude patterns
+        const currentExcludes = config.get<string[]>('watchExclude', []);
+        
+        // Standard patterns to exclude
+        const standardExcludes = [
+            '**/node_modules/**',
+            '**/build/**',
+            '**/DerivedData/**',
+            '**/.git/**',
+            '**/Pods/**',
+            '**/*.xcodeproj/xcuserdata/**',
+            '**/*.xcworkspace/xcuserdata/**'
+        ];
+        
+        // Merge and deduplicate
+        const newExcludes = Array.from(new Set([...currentExcludes, ...standardExcludes]));
+        
+        // Update configuration
+        await config.update('watchExclude', newExcludes, vscode.ConfigurationTarget.Workspace);
+        
+        // Enable throttling
+        const performanceConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+        await performanceConfig.update('useThrottling', true, vscode.ConfigurationTarget.Workspace);
+        
+        // Set an appropriate debounce delay
+        await config.update('debounceDelay', 1000, vscode.ConfigurationTarget.Workspace);
+        
+        outputChannel?.appendLine('File watchers optimized');
+    } catch (error) {
+        outputChannel?.appendLine(`Error optimizing file watchers: ${error}`);
+        throw error;
+    }
+}
+
+/**
+ * Optimize search exclude patterns
+ */
+async function optimizeSearchExcludes(): Promise<void> {
+    try {
+        // Get search configuration
+        const config = vscode.workspace.getConfiguration('search');
+        
+        // Get current exclude patterns
+        const currentExcludes = config.get<{ [key: string]: boolean }>('exclude', {});
+        
+        // Standard patterns to exclude
+        const standardExcludes: { [key: string]: boolean } = {
+            '**/node_modules/**': true,
+            '**/build/**': true,
+            '**/DerivedData/**': true,
+            '**/.git/**': true,
+            '**/Pods/**': true,
+            '**/*.xcodeproj/xcuserdata/**': true,
+            '**/*.xcworkspace/xcuserdata/**': true,
+            '**/*.pbxproj': true,
+            '**/*.xcscheme': true
+        };
+        
+        // Merge
+        const newExcludes = { ...currentExcludes, ...standardExcludes };
+        
+        // Update configuration
+        await config.update('exclude', newExcludes, vscode.ConfigurationTarget.Workspace);
+        
+        outputChannel?.appendLine('Search exclude patterns optimized');
+    } catch (error) {
+        outputChannel?.appendLine(`Error optimizing search exclude patterns: ${error}`);
+        throw error;
+    }
+}
+
+/**
+ * Optimize editor settings
+ */
+async function optimizeEditorSettings(): Promise<void> {
+    try {
+        // Get editor configuration
+        const config = vscode.workspace.getConfiguration('editor');
+        
+        // Optimization settings
+        const optimizations: { [key: string]: any } = {
+            // File watching optimizations
+            'files.watcherExclude': {
+                '**/node_modules/**': true,
+                '**/build/**': true,
+                '**/DerivedData/**': true,
+                '**/.git/**': true,
+                '**/Pods/**': true,
+                '**/*.xcodeproj/xcuserdata/**': true,
+                '**/*.xcworkspace/xcuserdata/**': true
+            },
+            
+            // Editor optimizations
+            'editor.minimap.enabled': false,
+            'editor.renderWhitespace': 'none',
+            'editor.renderControlCharacters': false,
+            'editor.renderLineHighlight': 'line',
+            'editor.scrollBeyondLastLine': false
+        };
+        
+        // Apply optimizations
+        for (const [key, value] of Object.entries(optimizations)) {
+            const parts = key.split('.');
+            const section = parts[0];
+            const rest = parts.slice(1).join('.');
+            
+            const sectionConfig = vscode.workspace.getConfiguration(section);
+            await sectionConfig.update(rest, value, vscode.ConfigurationTarget.Workspace);
+        }
+        
+        outputChannel?.appendLine('Editor settings optimized');
+    } catch (error) {
+        outputChannel?.appendLine(`Error optimizing editor settings: ${error}`);
+        throw error;
+    }
+}
+
+/**
+ * Show performance metrics
+ */
+function showPerformanceMetrics(): void {
+    // Format metrics for display
+    const formattedMetrics = `Performance Metrics:
+- CPU Usage: ${currentMetrics.cpuUsage.toFixed(2)}%
+- Memory Usage: ${currentMetrics.memoryUsage.toFixed(2)} MB
+- File Count: ${currentMetrics.fileCount}
+- Last Refresh: ${currentMetrics.lastRefresh.toLocaleString()}`;
+    
+    // Show the metrics
+    vscode.window.showInformationMessage(formattedMetrics, 'Refresh', 'Optimize Now')
+        .then(selection => {
+            if (selection === 'Refresh') {
+                refreshPerformanceMetrics();
+                showPerformanceMetrics();
+            } else if (selection === 'Optimize Now') {
+                optimizeWorkspace();
+            }
+        });
+    
+    // Log to output channel
+    outputChannel?.appendLine(formattedMetrics);
+}
+
+/**
+ * Get the cache directory path
+ * @returns Cache directory path
+ */
+function getCacheDirectory(): string {
+    // Get workspace folder
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+    
+    if (workspaceFolder) {
+        return path.join(workspaceFolder, '.vscode-xcode-integration', 'cache');
+    }
+    
+    // Fallback to global cache directory
+    return path.join(os.tmpdir(), 'vscode-xcode-integration', 'cache');
+}
+
+/**
+ * Check if a path exists
+ * @param filePath Path to check
+ * @returns Promise resolving to true if the path exists
+ */
+async function pathExists(filePath: string): Promise<boolean> {
+    try {
+        await fs.promises.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Delete a directory recursively
+ * @param dirPath Directory to delete
+ */
+async function deleteDirectory(dirPath: string): Promise<void> {
+    try {
+        const entries = await fs.promises.readdir(dirPath);
+        
+        for (const entry of entries) {
+            const fullPath = path.join(dirPath, entry);
+            const stats = await fs.promises.stat(fullPath);
+            
+            if (stats.isDirectory()) {
+                await deleteDirectory(fullPath);
+            } else {
+                await fs.promises.unlink(fullPath);
+            }
+        }
+        
+        await fs.promises.rmdir(dirPath);
+    } catch (error) {
+        outputChannel?.appendLine(`Error deleting directory ${dirPath}: ${error}`);
+        throw error;
+    }
+}
+
+/**
+ * Clean up resources
  */
 export function dispose(): void {
-    if (performanceTerminal) {
-        performanceTerminal.dispose();
-        performanceTerminal = undefined;
-    }
-
-    if (performanceStatusItem) {
-        performanceStatusItem.dispose();
-    }
-}
-
-/**
- * Check if performance scripts are available
- */
-function arePerformanceScriptsAvailable(): boolean {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return false;
-    }
-
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performancePath = path.join(workspaceFolder, 'scripts', 'performance');
-    const mainScriptPath = path.join(performancePath, 'performance.sh');
-
-    return fs.existsSync(mainScriptPath);
-}
-
-/**
- * Check if performance features are enabled
- */
-function arePerformanceFeaturesEnabled(): boolean {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return false;
-    }
-
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const disabledFlagPath = path.join(workspaceFolder, '.vscode-xcode-integration', 'performance_disabled');
-
-    return !fs.existsSync(disabledFlagPath);
-}
-
-/**
- * Check performance status
- * @param outputChannel Output channel for logging
- */
-function checkPerformanceStatus(outputChannel: vscode.OutputChannel): void {
-    const scriptsAvailable = arePerformanceScriptsAvailable();
-    const featuresEnabled = arePerformanceFeaturesEnabled();
-    
-    if (!scriptsAvailable) {
-        performanceStatusItem.text = "$(dashboard) Perf: Not Available";
-        performanceStatusItem.tooltip = "Performance optimization scripts not found";
-        outputChannel.appendLine("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!featuresEnabled) {
-        performanceStatusItem.text = "$(dashboard) Perf: Disabled";
-        performanceStatusItem.tooltip = "Performance optimization features are disabled";
-        outputChannel.appendLine("Performance optimization features are disabled");
-        return;
-    }
-    
-    // Check for running processes
-    checkRunningProcesses(outputChannel);
-}
-
-/**
- * Check running performance processes
- * @param outputChannel Output channel for logging
- */
-function checkRunningProcesses(outputChannel: vscode.OutputChannel): void {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    try {
-        const processResult = cp.spawnSync(performanceScript, ['status'], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        const output = processResult.stdout;
-        
-        if (output && output.includes('Selective file watcher is running')) {
-            performanceStatusItem.text = "$(dashboard) Perf: Active";
-            performanceStatusItem.tooltip = "Performance optimization features are active";
-            outputChannel.appendLine("Performance optimization features are active");
-        } else {
-            performanceStatusItem.text = "$(dashboard) Perf: Idle";
-            performanceStatusItem.tooltip = "Performance optimization features are idle";
-            outputChannel.appendLine("Performance optimization features are idle");
-        }
-    } catch (err) {
-        outputChannel.appendLine(`Error checking performance status: ${err}`);
-        performanceStatusItem.text = "$(dashboard) Perf: Error";
-        performanceStatusItem.tooltip = "Error checking performance status";
-    }
-}
-
-/**
- * Update performance settings from configuration
- * @param outputChannel Output channel for logging
- */
-function updatePerformanceSettings(outputChannel: vscode.OutputChannel): void {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance_config.sh');
-    
-    // Get configuration values
-    const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
-    const watchExclude = config.get<string[]>('watchExclude', []);
-    const debounceDelay = config.get<number>('debounceDelay', 1000);
-    
-    try {
-        // Update exclude patterns
-        if (watchExclude.length > 0) {
-            const excludePatterns = watchExclude.join(',');
-            cp.spawnSync(performanceScript, ['set', 'watch_exclude_patterns', excludePatterns], {
-                cwd: workspaceFolder,
-                encoding: 'utf8',
-                shell: true
-            });
-        }
-        
-        // Update debounce delay
-        cp.spawnSync(performanceScript, ['set', 'debounce_delay', debounceDelay.toString()], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        outputChannel.appendLine("Performance settings updated from configuration");
-    } catch (err) {
-        outputChannel.appendLine(`Error updating performance settings: ${err}`);
-    }
-}
-
-/**
- * Start the selective file watcher
- * @param outputChannel Output channel for logging
- */
-function startSelectiveWatcher(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!arePerformanceFeaturesEnabled()) {
-        vscode.window.showWarningMessage("Performance optimization features are disabled", "Enable")
-            .then(selection => {
-                if (selection === "Enable") {
-                    togglePerformanceFeatures(outputChannel);
-                    // Try again after enabling
-                    setTimeout(() => startSelectiveWatcher(outputChannel), 1000);
-                }
-            });
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    // Create and show terminal
-    performanceTerminal = vscode.window.createTerminal('Selective File Watcher');
-    performanceTerminal.show();
-    
-    // Execute command in terminal
-    performanceTerminal.sendText(`${performanceScript} selective-watch`);
-    
-    outputChannel.appendLine("Started selective file watcher");
-    
-    // Update status
-    setTimeout(() => checkPerformanceStatus(outputChannel), 2000);
-}
-
-/**
- * Analyze project dependencies
- * @param outputChannel Output channel for logging
- */
-function analyzeProject(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!arePerformanceFeaturesEnabled()) {
-        vscode.window.showWarningMessage("Performance optimization features are disabled", "Enable")
-            .then(selection => {
-                if (selection === "Enable") {
-                    togglePerformanceFeatures(outputChannel);
-                    // Try again after enabling
-                    setTimeout(() => analyzeProject(outputChannel), 1000);
-                }
-            });
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    // Create and show terminal
-    const analyzeTerminal = vscode.window.createTerminal('Project Dependency Analysis');
-    analyzeTerminal.show();
-    
-    // Execute command in terminal
-    analyzeTerminal.sendText(`${performanceScript} analyze-project`);
-    
-    outputChannel.appendLine("Started project dependency analysis");
-}
-
-/**
- * Show performance status
- * @param outputChannel Output channel for logging
- */
-function showPerformanceStatus(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    try {
-        const processResult = cp.spawnSync(performanceScript, ['status'], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        const statusOutput = processResult.stdout;
-        
-        if (statusOutput) {
-            // Create a new output channel for status
-            const statusChannel = vscode.window.createOutputChannel('Xcode Performance Status');
-            statusChannel.appendLine(statusOutput);
-            statusChannel.show();
-        } else {
-            vscode.window.showErrorMessage("Failed to get performance status");
-        }
-    } catch (err) {
-        outputChannel.appendLine(`Error showing performance status: ${err}`);
-        vscode.window.showErrorMessage(`Error showing performance status: ${err}`);
-    }
-}
-
-/**
- * Monitor performance in real-time
- * @param outputChannel Output channel for logging
- */
-function monitorPerformance(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    // Create and show terminal
-    const monitorTerminal = vscode.window.createTerminal('Performance Monitor');
-    monitorTerminal.show();
-    
-    // Execute command in terminal
-    monitorTerminal.sendText(`${performanceScript} monitor-resources`);
-    
-    outputChannel.appendLine("Started performance monitoring");
-}
-
-/**
- * Configure performance settings
- * @param outputChannel Output channel for logging
- */
-function configurePerformance(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    // Show available configuration options
-    vscode.window.showQuickPick([
-        { label: 'Show Current Settings', id: 'show' },
-        { label: 'Apply Profile: Default', id: 'default' },
-        { label: 'Apply Profile: Performance', id: 'performance' },
-        { label: 'Apply Profile: Lightweight', id: 'lightweight' },
-        { label: 'Apply Profile: Large Project', id: 'large-project' },
-        { label: 'Toggle Performance Features', id: 'toggle' },
-        { label: 'Configure Using Editor...', id: 'editor' }
-    ], {
-        placeHolder: 'Select Performance Configuration Option'
-    }).then(selection => {
-        if (!selection) return;
-        
-        switch (selection.id) {
-            case 'show':
-                showPerformanceStatus(outputChannel);
-                break;
-            case 'default':
-            case 'performance':
-            case 'lightweight':
-            case 'large-project':
-                applyPerformanceProfile(selection.id, outputChannel);
-                break;
-            case 'toggle':
-                togglePerformanceFeatures(outputChannel);
-                break;
-            case 'editor':
-                openConfigEditor(outputChannel);
-                break;
-        }
-    });
-}
-
-/**
- * Apply a performance profile
- * @param profile Profile name
- * @param outputChannel Output channel for logging
- */
-function applyPerformanceProfile(profile: string, outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    try {
-        const processResult = cp.spawnSync(performanceScript, ['apply-profile', profile], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        if (processResult.status === 0) {
-            vscode.window.showInformationMessage(`Applied performance profile: ${profile}`);
-            outputChannel.appendLine(`Applied performance profile: ${profile}`);
-            
-            // Update VSCode settings to match the profile
-            updateVSCodeSettingsForProfile(profile, outputChannel);
-        } else {
-            vscode.window.showErrorMessage(`Failed to apply performance profile: ${profile}`);
-            outputChannel.appendLine(`Failed to apply performance profile: ${profile}\n${processResult.stdout}`);
-        }
-    } catch (err) {
-        outputChannel.appendLine(`Error applying performance profile: ${err}`);
-        vscode.window.showErrorMessage(`Error applying performance profile: ${err}`);
-    }
-}
-
-/**
- * Update VSCode settings to match a performance profile
- * @param profile Profile name
- * @param outputChannel Output channel for logging
- */
-function updateVSCodeSettingsForProfile(profile: string, outputChannel: vscode.OutputChannel): void {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceConfigScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance_config.sh');
-    
-    try {
-        // Get settings from profile
-        const debounceDelayProcess = cp.spawnSync(performanceConfigScript, ['get', 'debounce_delay'], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        const watchExcludePatternsProcess = cp.spawnSync(performanceConfigScript, ['get', 'watch_exclude_patterns'], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        if (debounceDelayProcess.status === 0 && watchExcludePatternsProcess.status === 0) {
-            const debounceDelay = parseInt(debounceDelayProcess.stdout.trim(), 10);
-            const watchExcludePatterns = watchExcludePatternsProcess.stdout.trim().split(',');
-            
-            // Update VSCode settings
-            const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
-            config.update('debounceDelay', debounceDelay, vscode.ConfigurationTarget.Workspace);
-            config.update('watchExclude', watchExcludePatterns, vscode.ConfigurationTarget.Workspace);
-            
-            outputChannel.appendLine(`Updated VSCode settings for profile: ${profile}`);
-        }
-    } catch (err) {
-        outputChannel.appendLine(`Error updating VSCode settings for profile: ${err}`);
-    }
-}
-
-/**
- * Toggle performance features on/off
- * @param outputChannel Output channel for logging
- */
-function togglePerformanceFeatures(outputChannel: vscode.OutputChannel): void {
-    if (!arePerformanceScriptsAvailable()) {
-        vscode.window.showErrorMessage("Performance optimization scripts not found");
-        return;
-    }
-    
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const performanceScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance.sh');
-    
-    const currentlyEnabled = arePerformanceFeaturesEnabled();
-    const command = currentlyEnabled ? 'disable' : 'enable';
-    
-    try {
-        const processResult = cp.spawnSync(performanceScript, [command], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-        
-        if (processResult.status === 0) {
-            const statusMessage = currentlyEnabled ? 
-                'Performance optimization features disabled' : 
-                'Performance optimization features enabled';
-                
-            vscode.window.showInformationMessage(statusMessage);
-            outputChannel.appendLine(statusMessage);
-            
-            // Update status
-            checkPerformanceStatus(outputChannel);
-        } else {
-            vscode.window.showErrorMessage(`Failed to ${command} performance features`);
-            outputChannel.appendLine(`Failed to ${command} performance features\n${processResult.stdout}`);
-        }
-    } catch (err) {
-        outputChannel.appendLine(`Error toggling performance features: ${err}`);
-        vscode.window.showErrorMessage(`Error toggling performance features: ${err}`);
-    }
-}
-
-/**
- * Open the performance configuration file in an editor
- * @param outputChannel Output channel for logging
- */
-function openConfigEditor(outputChannel: vscode.OutputChannel): void {
-    if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
-        return;
-    }
-    
-    const workspaceFolder = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    const configPath = path.join(workspaceFolder, '.vscode-xcode-integration', 'config', 'performance.conf');
-    
-    // Check if config file exists
-    if (!fs.existsSync(configPath)) {
-        // Create default config first
-        const performanceConfigScript = path.join(workspaceFolder, 'scripts', 'performance', 'performance_config.sh');
-        cp.spawnSync(performanceConfigScript, ['reset'], {
-            cwd: workspaceFolder,
-            encoding: 'utf8',
-            shell: true
-        });
-    }
-    
-    // Open the config file in editor
-    vscode.workspace.openTextDocument(configPath).then(document => {
-        vscode.window.showTextDocument(document);
-    }).then(() => {
-        // Show info about editing
-        vscode.window.showInformationMessage(
-            'Editing Performance Configuration', 
-            'After saving, restart the file watcher to apply changes'
-        );
-    }).then(undefined, (err: Error) => {
-        outputChannel.appendLine(`Error opening config editor: ${err}`);
-        vscode.window.showErrorMessage(`Error opening config editor: ${err}`);
-    });
+    stopMonitoring();
+    isInitialized = false;
 }
