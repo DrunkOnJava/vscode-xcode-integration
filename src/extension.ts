@@ -9,11 +9,23 @@ import { PBXProjEditorProvider } from './pbxproj-editor';
 import { ensureCodeMirror } from './codemirror-loader';
 import { MultiProjectManager } from './multi-project';
 import {
-XcodeProjectProvider, 
-XcodeTargetProvider, 
-XcodeFileProvider,
+    XcodeProjectProvider, 
+    XcodeTargetProvider, 
+    XcodeFileProvider,
     XcodeItem
 } from './xcodeExplorer';
+
+// Import new sidebar components
+import {
+    initializeSidebar,
+    SidebarManager,
+    ProjectDetector,
+    CommandManager,
+    DropHandler,
+    BuildManager,
+    FileWatcherManager,
+    initializeErrorHandler
+} from './sidebar';
 
 // Status bar items
 let syncStatusItem: vscode.StatusBarItem;
@@ -26,44 +38,58 @@ let fileWatcher: vscode.FileSystemWatcher | undefined;
 
 // Extension state
 // @ts-ignore - Used in other files or for future use
-// @ts-ignore - Used in other files or for future use
 let isSync: boolean = true;
 // @ts-ignore - Used for future implementations
-// @ts-ignore - Used in status updates and for future implementation
 let lastSyncFile: string = '';
 // @ts-ignore - Used for future implementations
-// @ts-ignore - Used in status updates and for future implementation
 let lastSyncTime: Date | null = null;
 let securityEnabled: boolean = false;
 let errorHandlingEnabled: boolean = false;
 let multiProjectManager: MultiProjectManager;
+
+// New components
+let sidebarManager: SidebarManager;
+let projectDetector: ProjectDetector;
+let commandManager: CommandManager;
+let buildManager: BuildManager;
+let dropHandler: DropHandler;
+let fileWatcherManager: FileWatcherManager;
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('VSCode Xcode Integration is now active');
     
     // Create output channel for logging
     const outputChannel = vscode.window.createOutputChannel('Xcode Integration');
+    context.subscriptions.push(outputChannel);
+    
+    // Initialize error handler (do this first)
+    initializeErrorHandler(outputChannel);
     
     // Get workspace folder
     const workspaceRoot = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
         ? vscode.workspace.workspaceFolders[0].uri.fsPath
         : undefined;
-        
-    // Register Tree Data Providers
+    
+    // Initialize the new sidebar components
+    const sidebarComponents = initializeSidebar(context, outputChannel);
+    sidebarManager = sidebarComponents.sidebarManager;
+    projectDetector = sidebarComponents.projectDetector;
+    commandManager = sidebarComponents.commandManager;
+    buildManager = sidebarComponents.buildManager;
+    dropHandler = sidebarComponents.dropHandler;
+    fileWatcherManager = sidebarComponents.fileWatcherManager;
+    
+    // Legacy tree data providers (for backward compatibility)
     const projectProvider = new XcodeProjectProvider(workspaceRoot);
     const targetProvider = new XcodeTargetProvider(workspaceRoot);
     const fileProvider = new XcodeFileProvider(workspaceRoot);
     
-    // Register views
-    vscode.window.registerTreeDataProvider('xcode-projects', projectProvider);
+    // Register legacy views
     vscode.window.registerTreeDataProvider('xcode-targets', targetProvider);
-    vscode.window.registerTreeDataProvider('xcode-files', fileProvider);
     
-    // Register refresh commands
+    // Register refresh commands for legacy views
     context.subscriptions.push(
-        vscode.commands.registerCommand('vscode-xcode-integration.refreshProjects', () => projectProvider.refresh()),
-        vscode.commands.registerCommand('vscode-xcode-integration.refreshTargets', () => targetProvider.refresh()),
-        vscode.commands.registerCommand('vscode-xcode-integration.refreshFiles', () => fileProvider.refresh())
+        vscode.commands.registerCommand('vscode-xcode-integration.refreshTargets', () => targetProvider.refresh())
     );
     
     // Register context menu commands
@@ -126,29 +152,6 @@ export function activate(context: vscode.ExtensionContext) {
             }
         })
     );
-
-        // Set up auto-refresh for explorer if enabled
-    const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
-    if (config.get<boolean>('autoRefreshExplorer', true)) {
-        const fileWatcher = vscode.workspace.createFileSystemWatcher(
-            '**/*.{swift,h,m,xcodeproj,xcworkspace}',
-            false, false, false
-        );
-        
-        // Debounce to avoid multiple refreshes
-        const debouncedRefresh = debounce(() => {
-            projectProvider.refresh();
-            targetProvider.refresh();
-            fileProvider.refresh();
-        }, config.get<number>('debounceDelay', 1000));
-        
-        fileWatcher.onDidChange(debouncedRefresh);
-        fileWatcher.onDidCreate(debouncedRefresh);
-        fileWatcher.onDidDelete(debouncedRefresh);
-        
-        context.subscriptions.push(fileWatcher);
-        outputChannel.appendLine('Xcode Explorer auto-refresh enabled');
-    }
 
     // Initialize status bar items
     syncStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -249,6 +252,24 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.commands.registerCommand('vscode-xcode-integration.determineBuildOrder', () => {
             multiProjectManager.determineBuildOrder();
+        }),
+        // New command to add a project
+        vscode.commands.registerCommand('vscode-xcode-integration.addProject', async () => {
+            // Show file picker to select a project
+            const files = await vscode.window.showOpenDialog({
+                canSelectFiles: false,
+                canSelectFolders: true,
+                canSelectMany: false,
+                openLabel: 'Select Xcode Project',
+                filters: {
+                    'Xcode Projects': ['xcodeproj', 'xcworkspace']
+                }
+            });
+            
+            if (files && files.length > 0) {
+                // Process the selected project
+                dropHandler['processDroppedFile'](files[0].fsPath);
+            }
         })
     );
 
@@ -289,12 +310,16 @@ export function activate(context: vscode.ExtensionContext) {
             context.subscriptions.push(PBXProjEditorProvider.register(context));
         }
     });
+    
+    // Activate the projects tab by default
+    sidebarManager.activateTab('projects');
 }
 
 export function deactivate() {
     if (fileWatcher) {
         fileWatcher.dispose();
     }
+    
     syncStatusItem.dispose();
     xcodeStatusItem.dispose();
     securityStatusItem.dispose();
@@ -352,9 +377,9 @@ function checkErrorHandlingComponents(outputChannel: vscode.OutputChannel) {
                         });
                         
                         if (makeDirsProcess.error) {
-                            outputChannel.appendLine(`Error creating directories: \${makeDirsProcess.stderr || makeDirsProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+                            outputChannel.appendLine(`Error creating directories: ${makeDirsProcess.stderr || makeDirsProcess.error?.message || "Unknown error"}`);
                         } else {
-                            outputChannel.appendLine(`Directory setup complete: \${makeDirsProcess.stdout}`);
+                            outputChannel.appendLine(`Directory setup complete: ${makeDirsProcess.stdout}`);
                         }
                     } else {
                         // Create dirs manually
@@ -369,12 +394,12 @@ function checkErrorHandlingComponents(outputChannel: vscode.OutputChannel) {
                         dirs.forEach(dir => {
                             if (!fs.existsSync(dir)) {
                                 fs.mkdirSync(dir, { recursive: true });
-                                outputChannel.appendLine(`Created directory: \${dir}`);
+                                outputChannel.appendLine(`Created directory: ${dir}`);
                             }
                         });
                     }
                 } catch (error) {
-                    outputChannel.appendLine(`Error setting up error handling directories: \${error}`);
+                    outputChannel.appendLine(`Error setting up error handling directories: ${error}`);
                 }
                 
                 // Make scripts executable
@@ -393,24 +418,24 @@ function checkErrorHandlingComponents(outputChannel: vscode.OutputChannel) {
                         });
                         
                         if (makeExecProcess.error) {
-                            outputChannel.appendLine(`Error making scripts executable: \${makeExecProcess.stderr || makeExecProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+                            outputChannel.appendLine(`Error making scripts executable: ${makeExecProcess.stderr || makeExecProcess.error?.message || "Unknown error"}`);
                         } else {
-                            outputChannel.appendLine(`Scripts made executable: \${makeExecProcess.stdout}`);
+                            outputChannel.appendLine(`Scripts made executable: ${makeExecProcess.stdout}`);
                         }
                     } else {
                         // Make scripts executable manually
                         coreFiles.forEach(file => {
                             const scriptPath = path.join(errorHandlingPath, file);
                             cp.spawnSync('chmod', ['+x', scriptPath]);
-                            outputChannel.appendLine(`Made executable: \${scriptPath}`);
+                            outputChannel.appendLine(`Made executable: ${scriptPath}`);
                         });
                     }
                 } catch (error) {
-                    outputChannel.appendLine(`Error making scripts executable: \${error}`);
+                    outputChannel.appendLine(`Error making scripts executable: ${error}`);
                 }
             } else {
                 errorHandlingEnabled = false;
-                outputChannel.appendLine(`Error handling components missing: \${missingFiles.join(', ')}`);
+                outputChannel.appendLine(`Error handling components missing: ${missingFiles.join(', ')}`);
             }
         } else {
             errorHandlingEnabled = false;
@@ -418,7 +443,7 @@ function checkErrorHandlingComponents(outputChannel: vscode.OutputChannel) {
         }
     } catch (err) {
         errorHandlingEnabled = false;
-        outputChannel.appendLine(`Error checking error handling components: \${err}`);
+        outputChannel.appendLine(`Error checking error handling components: ${err}`);
     }
     
     updateTransactionStatusItem();
@@ -472,7 +497,7 @@ function checkSecurityComponents(outputChannel: vscode.OutputChannel) {
                 updateSecurityConfig(outputChannel);
             } else {
                 securityEnabled = false;
-                outputChannel.appendLine(`Security components missing: \${missingFiles.join(', ')}`);
+                outputChannel.appendLine(`Security components missing: ${missingFiles.join(', ')}`);
             }
         } else {
             securityEnabled = false;
@@ -480,7 +505,7 @@ function checkSecurityComponents(outputChannel: vscode.OutputChannel) {
         }
     } catch (err) {
         securityEnabled = false;
-        outputChannel.appendLine(`Error checking security components: \${err}`);
+        outputChannel.appendLine(`Error checking security components: ${err}`);
     }
     
     updateSecurityStatusItem();
@@ -529,7 +554,7 @@ function updateSecurityConfig(outputChannel: vscode.OutputChannel) {
         
         // Write config file
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-        outputChannel.appendLine(`Updated security configuration at \${configPath}`);
+        outputChannel.appendLine(`Updated security configuration at ${configPath}`);
         
         // Update allowlist file for paths
         const pathAllowlistPath = path.join(workspaceFolder, 'scripts', 'security', 'path_allowlist.txt');
@@ -547,10 +572,10 @@ function updateSecurityConfig(outputChannel: vscode.OutputChannel) {
             allowedExternalPaths.join('\n');
             
         fs.writeFileSync(pathAllowlistPath, allowlistContent);
-        outputChannel.appendLine(`Updated path allowlist at \${pathAllowlistPath}`);
+        outputChannel.appendLine(`Updated path allowlist at ${pathAllowlistPath}`);
         
     } catch (err) {
-        outputChannel.appendLine(`Error updating security configuration: \${err}`);
+        outputChannel.appendLine(`Error updating security configuration: ${err}`);
     }
 }
 
@@ -573,9 +598,7 @@ function updateSecurityStatusItem() {
 // Setup file watcher with configuration options
 function setupFileWatcher(context: vscode.ExtensionContext, outputChannel: vscode.OutputChannel) {
     // Get configuration
-    // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+    const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
     const enableAutoSync = config.get<boolean>('enableAutoSync', true);
     const watchExclude = config.get<string[]>('watchExclude', []);
     const debounceDelay = config.get<number>('debounceDelay', 1000);
@@ -599,51 +622,67 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
             '**/*.xcassets/**/*.{json,png,jpg,jpeg}', '**/*.xcdatamodeld/**/*.{xcdatamodel}'
         ];
 
-        fileWatcher = vscode.workspace.createFileSystemWatcher(
-            `{\${fileWatcherPatterns.join(',')}}`,
-            false, // Don't ignore creates
-            false, // Don't ignore changes
-            false  // Don't ignore deletes
-        );
-
-        // Create a debounced function for file changes
-        const debouncedHandleFileChange = debounce((uri: vscode.Uri) => {
-            // Skip excluded paths
-            for (const pattern of watchExclude) {
-                if (uri.fsPath.match(new RegExp(pattern.replace(/\*/g, ".*")))) {
-                    outputChannel.appendLine(`File ${uri.fsPath} excluded from sync (matched ${pattern})`);
-                    return;
+        // Use enhanced file watcher if enabled
+        const performanceConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.performance');
+        const useEnhancedWatcher = performanceConfig.get<boolean>('useSelectiveWatch', false) || 
+                                  performanceConfig.get<boolean>('useThrottling', false);
+        
+        if (useEnhancedWatcher && fileWatcherManager) {
+            // Use the enhanced file watcher
+            fileWatcher = fileWatcherManager.createOptimizedFileWatcher(
+                fileWatcherPatterns,
+                watchExclude,
+                (uri) => handleFileChange(uri, outputChannel)
+            );
+            
+            outputChannel.appendLine('Created optimized file watcher with enhanced performance options');
+        } else {
+            // Use standard file watcher
+            fileWatcher = vscode.workspace.createFileSystemWatcher(
+                `{${fileWatcherPatterns.join(',')}}`,
+                false, // Don't ignore creates
+                false, // Don't ignore changes
+                false  // Don't ignore deletes
+            );
+    
+            // Create a debounced function for file changes
+            const debouncedHandleFileChange = debounce((uri: vscode.Uri) => {
+                // Skip excluded paths
+                for (const pattern of watchExclude) {
+                    if (uri.fsPath.match(new RegExp(pattern.replace(/\*/g, ".*")))) {
+                        outputChannel.appendLine(`File ${uri.fsPath} excluded from sync (matched ${pattern})`);
+                        return;
+                    }
                 }
-            }
-
-            handleFileChange(uri, outputChannel);
-        }, debounceDelay);
-
-        // Add event listeners
-        fileWatcher.onDidChange(debouncedHandleFileChange);
-        fileWatcher.onDidCreate(debouncedHandleFileChange);
-        fileWatcher.onDidDelete(uri => {
-            outputChannel.appendLine(`File deleted: ${uri.fsPath} - notifying Xcode`);
-            // We need special handling for file deletion
-            handleFileDelete(uri, outputChannel);
-        });
-
-        outputChannel.appendLine('File watcher created with patterns: ' + fileWatcherPatterns.join(', '));
+    
+                handleFileChange(uri, outputChannel);
+            }, debounceDelay);
+    
+            // Add event listeners
+            fileWatcher.onDidChange(debouncedHandleFileChange);
+            fileWatcher.onDidCreate(debouncedHandleFileChange);
+            fileWatcher.onDidDelete(uri => {
+                outputChannel.appendLine(`File deleted: ${uri.fsPath} - notifying Xcode`);
+                // We need special handling for file deletion
+                handleFileDelete(uri, outputChannel);
+            });
+    
+            outputChannel.appendLine('File watcher created with patterns: ' + fileWatcherPatterns.join(', '));
+        }
+        
         syncStatusItem.text = "$(sync) Xcode: Ready";
         
         context.subscriptions.push(fileWatcher);
     } catch (err) {
-        outputChannel.appendLine(`Error setting up file watcher: \${err}`);
-        vscode.window.showErrorMessage(`Failed to set up Xcode integration: \${err}`);
+        outputChannel.appendLine(`Error setting up file watcher: ${err}`);
+        vscode.window.showErrorMessage(`Failed to set up Xcode integration: ${err}`);
     }
 }
 
 // Handle file changes
 function handleFileChange(uri: vscode.Uri, outputChannel: vscode.OutputChannel) {
-    // @ts-ignore
-// @ts-ignore - Used for processing the file path
-const filePath = uri.fsPath;
-    outputChannel.appendLine(`File changed: \${filePath}`);
+    const filePath = uri.fsPath;
+    outputChannel.appendLine(`File changed: ${filePath}`);
     
     // Update status bar
     syncStatusItem.text = "$(sync~spin) Xcode: Syncing...";
@@ -655,9 +694,7 @@ const filePath = uri.fsPath;
         
         // Add security configuration
         const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-        // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+        const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
         
         if (securityEnabled) {
             // Pass security settings via environment variables
@@ -716,9 +753,9 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             env: { ...process.env, ...extraEnv }
         });
         
-        if ((process as any).error) {
-            outputChannel.appendLine(`Error executing script: \${process.stderr || process.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
-            vscode.window.showErrorMessage(`Failed to sync with Xcode: \${process.stderr || process.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+        if (processResult.error) {
+            outputChannel.appendLine(`Error executing script: ${processResult.stderr || processResult.error?.message || "Unknown error"}`);
+            vscode.window.showErrorMessage(`Failed to sync with Xcode: ${processResult.stderr || processResult.error?.message || "Unknown error"}`);
             syncStatusItem.text = "$(error) Xcode: Sync Error";
             
             // Update transaction status on error
@@ -730,14 +767,13 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             return;
         }
         
-        outputChannel.appendLine(`Script output: \${processResult.stdout}`);
-        if (processResult.stdout) {
-            outputChannel.appendLine(`Script error: \${processResult.stdout}`);
+        outputChannel.appendLine(`Script output: ${processResult.stdout}`);
+        if (processResult.stderr) {
+            outputChannel.appendLine(`Script error: ${processResult.stderr}`);
         }
         
         // Check for security warnings in output
-        if (processResult.stdout && processResult.stdout.includes('security') || 
-            processResult.stdout && processResult.stdout.includes('Security')) {
+        if (processResult.stdout && (processResult.stdout.includes('security') || processResult.stdout.includes('Security'))) {
             vscode.window.showWarningMessage('Security warning during sync. Check the output for details.', 'Show Details')
                 .then(selection => {
                     if (selection === 'Show Details') {
@@ -747,8 +783,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         }
         
         // Check for error handling messages
-        if (processResult.stdout && processResult.stdout.includes('ERROR') || 
-            processResult.stdout && processResult.stdout.includes('ERROR')) {
+        if (processResult.stdout && (processResult.stdout.includes('ERROR') || processResult.stdout.includes('Error'))) {
             vscode.window.showWarningMessage('Errors occurred during sync. Check the output for details.', 'Show Details', 'Repair')
                 .then(selection => {
                     if (selection === 'Show Details') {
@@ -771,21 +806,17 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         }
         
         // Show notification
-        // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         if (config.get<boolean>('showNotifications', true)) {
-            // @ts-ignore
-// @ts-ignore - Used in notification display
-const fileType = isResourceFile(filePath) ? 
+            const fileType = isResourceFile(filePath) ? 
                 getResourceFileType(filePath) : 
                 path.extname(filePath).replace('.', '');
                 
-            vscode.window.showInformationMessage(`Synced \${fileType} file with Xcode: ${path.basename(filePath)}`);
+            vscode.window.showInformationMessage(`Synced ${fileType} file with Xcode: ${path.basename(filePath)}`);
         }
     } catch (err) {
-        outputChannel.appendLine(`Error syncing file: \${err}`);
-        vscode.window.showErrorMessage(`Failed to sync with Xcode: \${err}`);
+        outputChannel.appendLine(`Error syncing file: ${err}`);
+        vscode.window.showErrorMessage(`Failed to sync with Xcode: ${err}`);
         syncStatusItem.text = "$(error) Xcode: Sync Error";
         
         // Update transaction status on error
@@ -801,10 +832,8 @@ const fileType = isResourceFile(filePath) ?
 
 // Handle file deletion
 function handleFileDelete(uri: vscode.Uri, outputChannel: vscode.OutputChannel) {
-    // @ts-ignore
-// @ts-ignore - Used for processing the file path
-const filePath = uri.fsPath;
-    outputChannel.appendLine(`File deleted: \${filePath}`);
+    const filePath = uri.fsPath;
+    outputChannel.appendLine(`File deleted: ${filePath}`);
     
     // Update Xcode project file to reflect deletion
     try {
@@ -816,7 +845,7 @@ const filePath = uri.fsPath;
         });
         
         if (findProcess.error) {
-            outputChannel.appendLine(`Error finding Xcode project: \${findProcess.stderr || findProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+            outputChannel.appendLine(`Error finding Xcode project: ${findProcess.stderr || findProcess.error?.message || "Unknown error"}`);
             return;
         }
         
@@ -830,9 +859,7 @@ const filePath = uri.fsPath;
         
         // Security check before touching project file
         const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-        // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+        const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
         
         if (securityEnabled) {
             // Check permissions first
@@ -846,8 +873,8 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             });
             
             if (permProcess.status !== 0) {
-                outputChannel.appendLine(`Security check failed for project file: \${permProcess.stderr}`);
-                vscode.window.showWarningMessage(`Cannot update project file due to permission issues. \${permProcess.stderr}`);
+                outputChannel.appendLine(`Security check failed for project file: ${permProcess.stderr}`);
+                vscode.window.showWarningMessage(`Cannot update project file due to permission issues. ${permProcess.stderr}`);
                 return;
             }
         }
@@ -881,7 +908,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             });
             
             if (transactionProcess.error) {
-                outputChannel.appendLine(`Error starting transaction: \${transactionProcess.stderr || transactionProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+                outputChannel.appendLine(`Error starting transaction: ${transactionProcess.stderr || transactionProcess.error?.message || "Unknown error"}`);
             } else {
                 const transactionId = transactionProcess.stdout.trim();
                 outputChannel.appendLine(`Started transaction ${transactionId} for file deletion`);
@@ -896,7 +923,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
                 
                 // Touch the project file
                 cp.spawnSync('touch', [projectFilePath], { cwd: workspaceFolder });
-                outputChannel.appendLine(`Touched Xcode project file: \${projectFilePath}`);
+                outputChannel.appendLine(`Touched Xcode project file: ${projectFilePath}`);
                 
                 // Commit the transaction
                 cp.spawnSync(transactionScriptPath, ['commit', transactionId], {
@@ -911,18 +938,16 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         } else {
             // Without transactions, just touch the project file
             cp.spawnSync('touch', [projectFilePath], { cwd: workspaceFolder });
-            outputChannel.appendLine(`Touched Xcode project file: \${projectFilePath}`);
+            outputChannel.appendLine(`Touched Xcode project file: ${projectFilePath}`);
         }
         
         // Show notification
-        // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         if (config.get<boolean>('showNotifications', true)) {
-            vscode.window.showInformationMessage(`Notified Xcode of deleted file: \${path.basename(filePath)}`);
+            vscode.window.showInformationMessage(`Notified Xcode of deleted file: ${path.basename(filePath)}`);
         }
     } catch (err) {
-        outputChannel.appendLine(`Error handling file deletion: \${err}`);
+        outputChannel.appendLine(`Error handling file deletion: ${err}`);
         
         // Update transaction status on error
         const errorHandlingConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.errorHandling');
@@ -958,9 +983,7 @@ function syncEntireProject(outputChannel: vscode.OutputChannel) {
         // Add security configuration
         let extraEnv: {[key: string]: string} = {};
         const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-        // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+        const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
         
         if (securityEnabled) {
             // Pass security settings via environment variables
@@ -1008,9 +1031,9 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             env: { ...process.env, ...extraEnv }
         });
         
-        if ((process as any).error) {
-            outputChannel.appendLine(`Error executing script: \${process.stderr || process.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
-            vscode.window.showErrorMessage(`Failed to sync project with Xcode: \${processResult.stderr || processResult.error?.message || "Unknown error"}`);
+        if (processResult.error) {
+            outputChannel.appendLine(`Error executing script: ${processResult.stderr || processResult.error?.message || "Unknown error"}`);
+            vscode.window.showErrorMessage(`Failed to sync project with Xcode: ${processResult.stderr || processResult.error?.message || "Unknown error"}`);
             syncStatusItem.text = "$(error) Xcode: Sync Error";
             
             // Update transaction status on error
@@ -1022,9 +1045,9 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             return;
         }
         
-        outputChannel.appendLine(`Script output: \${processResult.stdout}`);
-        if (processResult.stdout) {
-            outputChannel.appendLine(`Script error: \${processResult.stdout}`);
+        outputChannel.appendLine(`Script output: ${processResult.stdout}`);
+        if (processResult.stderr) {
+            outputChannel.appendLine(`Script error: ${processResult.stderr}`);
         }
         
         // Update status
@@ -1038,15 +1061,13 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         }
         
         // Show notification
-        // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         if (config.get<boolean>('showNotifications', true)) {
             vscode.window.showInformationMessage('Project successfully synced with Xcode');
         }
     } catch (err) {
-        outputChannel.appendLine(`Error syncing project: \${err}`);
-        vscode.window.showErrorMessage(`Failed to sync project with Xcode: \${err}`);
+        outputChannel.appendLine(`Error syncing project: ${err}`);
+        vscode.window.showErrorMessage(`Failed to sync project with Xcode: ${err}`);
         syncStatusItem.text = "$(error) Xcode: Sync Error";
         
         // Update transaction status on error
@@ -1077,9 +1098,7 @@ function checkProjectIntegrity(outputChannel: vscode.OutputChannel) {
     
     try {
         // Get Xcode project path from settings
-        // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         const projectPathSetting = config.get<string>('projectPath', '');
         const workspaceFolder = vscode.workspace.workspaceFolders![0].uri.fsPath;
         
@@ -1094,7 +1113,7 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
             });
             
             if (findProcess.error) {
-                outputChannel.appendLine(`Error finding Xcode project: \${findProcess.stderr || findProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+                outputChannel.appendLine(`Error finding Xcode project: ${findProcess.stderr || findProcess.error?.message || "Unknown error"}`);
                 vscode.window.showErrorMessage('Failed to find Xcode project. Set project path in settings.');
                 return;
             }
@@ -1103,7 +1122,7 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         }
         
         if (!projectPath || !fs.existsSync(projectPath)) {
-            outputChannel.appendLine(`Xcode project not found: \${projectPath}`);
+            outputChannel.appendLine(`Xcode project not found: ${projectPath}`);
             vscode.window.showErrorMessage('Xcode project not found. Set correct project path in settings.');
             return;
         }
@@ -1136,20 +1155,18 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
             
             // Open a terminal for the check (more interactive)
             const terminal = vscode.window.createTerminal('Project Integrity Check');
-            terminal.sendText(`export LOG_LEVEL=\${logLevel}`);
+            terminal.sendText(`export LOG_LEVEL=${logLevel}`);
             if (logFile) {
                 terminal.sendText(`export LOG_FILE="${logFile}"`);
             }
             
-            // @ts-ignore
-// @ts-ignore - Used in terminal commands
-const integrityCheckerPath = getScriptPath('error_handling/integrity_checker.sh');
-            terminal.sendText(`\${integrityCheckerPath} check "${projectPath}" ${selection.id}`);
+            const integrityCheckerPath = getScriptPath('error_handling/integrity_checker.sh');
+            terminal.sendText(`${integrityCheckerPath} check "${projectPath}" ${selection.id}`);
             terminal.show();
         });
     } catch (err) {
-        outputChannel.appendLine(`Error checking project integrity: \${err}`);
-        vscode.window.showErrorMessage(`Failed to check project integrity: \${err}`);
+        outputChannel.appendLine(`Error checking project integrity: ${err}`);
+        vscode.window.showErrorMessage(`Failed to check project integrity: ${err}`);
     }
 }
 
@@ -1170,9 +1187,7 @@ function repairProject(outputChannel: vscode.OutputChannel) {
     
     try {
         // Get Xcode project path from settings
-        // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+        const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         const projectPathSetting = config.get<string>('projectPath', '');
         const workspaceFolder = vscode.workspace.workspaceFolders![0].uri.fsPath;
         
@@ -1187,7 +1202,7 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
             });
             
             if (findProcess.error) {
-                outputChannel.appendLine(`Error finding Xcode project: \${findProcess.stderr || findProcess.error?.message || "Unknown error".stderr || processResult.error?.message || "Unknown error"}`);
+                outputChannel.appendLine(`Error finding Xcode project: ${findProcess.stderr || findProcess.error?.message || "Unknown error"}`);
                 vscode.window.showErrorMessage('Failed to find Xcode project. Set project path in settings.');
                 return;
             }
@@ -1196,7 +1211,7 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
         }
         
         if (!projectPath || !fs.existsSync(projectPath)) {
-            outputChannel.appendLine(`Xcode project not found: \${projectPath}`);
+            outputChannel.appendLine(`Xcode project not found: ${projectPath}`);
             vscode.window.showErrorMessage('Xcode project not found. Set correct project path in settings.');
             return;
         }
@@ -1229,20 +1244,18 @@ const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
             
             // Open a terminal for the repair (more interactive)
             const terminal = vscode.window.createTerminal('Project Repair');
-            terminal.sendText(`export LOG_LEVEL=\${logLevel}`);
+            terminal.sendText(`export LOG_LEVEL=${logLevel}`);
             if (logFile) {
                 terminal.sendText(`export LOG_FILE="${logFile}"`);
             }
             
-            // @ts-ignore
-// @ts-ignore - Used in terminal commands
-const selfHealerPath = getScriptPath('error_handling/self_healer.sh');
-            terminal.sendText(`\${selfHealerPath} repair "${projectPath}" ${selection.id}`);
+            const selfHealerPath = getScriptPath('error_handling/self_healer.sh');
+            terminal.sendText(`${selfHealerPath} repair "${projectPath}" ${selection.id}`);
             terminal.show();
         });
     } catch (err) {
-        outputChannel.appendLine(`Error repairing project: \${err}`);
-        vscode.window.showErrorMessage(`Failed to repair project: \${err}`);
+        outputChannel.appendLine(`Error repairing project: ${err}`);
+        vscode.window.showErrorMessage(`Failed to repair project: ${err}`);
     }
 }
 
@@ -1285,8 +1298,8 @@ function viewTransactionLog(outputChannel: vscode.OutputChannel) {
             terminal.show();
         }
     } catch (err) {
-        outputChannel.appendLine(`Error viewing transaction log: \${err}`);
-        vscode.window.showErrorMessage(`Failed to view transaction log: \${err}`);
+        outputChannel.appendLine(`Error viewing transaction log: ${err}`);
+        vscode.window.showErrorMessage(`Failed to view transaction log: ${err}`);
     }
 }
 
@@ -1294,9 +1307,7 @@ function viewTransactionLog(outputChannel: vscode.OutputChannel) {
 // Scan for sensitive data
 function scanForSensitiveData(outputChannel: vscode.OutputChannel) {
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     
     if (!securityEnabled) {
         vscode.window.showWarningMessage('Security features are disabled. Enable them in settings to use this function.', 'Open Settings')
@@ -1329,7 +1340,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         if (!selection) return;
         
         try {
-            outputChannel.appendLine(`Starting sensitive data scan for \${selection.label}`);
+            outputChannel.appendLine(`Starting sensitive data scan for ${selection.label}`);
             outputChannel.show();
             
             switch (selection.id) {
@@ -1375,7 +1386,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
                 }
                 
                 if (scanProcess.status === 0) {
-                    vscode.window.showInformationMessage(`No sensitive data found in \${path.basename(scanTarget)}`);
+                    vscode.window.showInformationMessage(`No sensitive data found in ${path.basename(scanTarget)}`);
                 } else {
                     vscode.window.showWarningMessage(`Potential sensitive data found in ${path.basename(scanTarget)}. See output for details.`);
                     outputChannel.show();
@@ -1387,8 +1398,8 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
             terminal.show();
             
         } catch (err) {
-            outputChannel.appendLine(`Error during sensitive data scan: \${err}`);
-            vscode.window.showErrorMessage(`Failed to scan for sensitive data: \${err}`);
+            outputChannel.appendLine(`Error during sensitive data scan: ${err}`);
+            vscode.window.showErrorMessage(`Failed to scan for sensitive data: ${err}`);
         }
     });
 }
@@ -1396,9 +1407,7 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
 // Validate project paths
 function validateProjectPaths(outputChannel: vscode.OutputChannel) {
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     
     if (!securityEnabled) {
         vscode.window.showWarningMessage('Security features are disabled. Enable them in settings to use this function.', 'Open Settings')
@@ -1432,17 +1441,15 @@ const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true
         terminal.show();
         
     } catch (err) {
-        outputChannel.appendLine(`Error validating project paths: \${err}`);
-        vscode.window.showErrorMessage(`Failed to validate project paths: \${err}`);
+        outputChannel.appendLine(`Error validating project paths: ${err}`);
+        vscode.window.showErrorMessage(`Failed to validate project paths: ${err}`);
     }
 }
 
 // Check file permissions
 function checkFilePermissions(outputChannel: vscode.OutputChannel) {
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     
     if (!securityEnabled) {
         vscode.window.showWarningMessage('Security features are disabled. Enable them in settings to use this function.', 'Open Settings')
@@ -1483,7 +1490,7 @@ function runPermissionCheck(filePath: string, outputChannel: vscode.OutputChanne
     try {
         const scriptPath = getScriptPath('security/permissions_checker.sh');
         
-        outputChannel.appendLine(`Checking permissions for: \${filePath}`);
+        outputChannel.appendLine(`Checking permissions for: ${filePath}`);
         outputChannel.show();
         
         // Run the permission check
@@ -1499,34 +1506,32 @@ function runPermissionCheck(filePath: string, outputChannel: vscode.OutputChanne
         }
         
         if (checkProcess.status === 0) {
-            vscode.window.showInformationMessage(`Permissions check passed for \${path.basename(filePath)}`);
+            vscode.window.showInformationMessage(`Permissions check passed for ${path.basename(filePath)}`);
         } else {
             vscode.window.showWarningMessage(`Permission issues found with ${path.basename(filePath)}. See output for details.`);
             outputChannel.show();
         }
     } catch (err) {
-        outputChannel.appendLine(`Error checking permissions: \${err}`);
-        vscode.window.showErrorMessage(`Failed to check permissions: \${err}`);
+        outputChannel.appendLine(`Error checking permissions: ${err}`);
+        vscode.window.showErrorMessage(`Failed to check permissions: ${err}`);
     }
 }
 
 // Show security status
 function showSecurityStatus(outputChannel: vscode.OutputChannel) {
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     
     const status = [
         `Xcode Integration Security Status:`,
-        `- Security checks: \${securityEnabled ? 'Enabled' : 'Disabled'}`,
-        `- Path validation: \${securityConfig.get<boolean>('validatePaths', true) ? 'Enabled' : 'Disabled'}`,
-        `- Permission checks: \${securityConfig.get<boolean>('checkPermissions', true) ? 'Enabled' : 'Disabled'}`,
-        `- Sensitive data scanning: \${securityConfig.get<boolean>('checkSensitiveData', true) ? 'Enabled' : 'Disabled'}`,
-        `- Automatic backups: \${securityConfig.get<boolean>('createBackups', true) ? 'Enabled' : 'Disabled'}`,
-        `- Interactive mode: \${securityConfig.get<boolean>('interactiveMode', true) ? 'Enabled' : 'Disabled'}`,
-        `- Auto-fix permissions: \${securityConfig.get<string>('autoFixPermissions', 'ask')}`,
-        `- Security log level: \${securityConfig.get<string>('securityLogLevel', 'INFO')}`
+        `- Security checks: ${securityEnabled ? 'Enabled' : 'Disabled'}`,
+        `- Path validation: ${securityConfig.get<boolean>('validatePaths', true) ? 'Enabled' : 'Disabled'}`,
+        `- Permission checks: ${securityConfig.get<boolean>('checkPermissions', true) ? 'Enabled' : 'Disabled'}`,
+        `- Sensitive data scanning: ${securityConfig.get<boolean>('checkSensitiveData', true) ? 'Enabled' : 'Disabled'}`,
+        `- Automatic backups: ${securityConfig.get<boolean>('createBackups', true) ? 'Enabled' : 'Disabled'}`,
+        `- Interactive mode: ${securityConfig.get<boolean>('interactiveMode', true) ? 'Enabled' : 'Disabled'}`,
+        `- Auto-fix permissions: ${securityConfig.get<string>('autoFixPermissions', 'ask')}`,
+        `- Security log level: ${securityConfig.get<string>('securityLogLevel', 'INFO')}`
     ];
     
     outputChannel.appendLine(status.join('\n'));
@@ -1612,33 +1617,27 @@ function updateDependencies(outputChannel: vscode.OutputChannel) {
 
 // Show status
 function showStatus(outputChannel: vscode.OutputChannel) {
-    // @ts-ignore
-// @ts-ignore - Used for reading configuration
-const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
+    const config = vscode.workspace.getConfiguration('vscode-xcode-integration');
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     const errorHandlingConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.errorHandling');
-    // @ts-ignore
-// @ts-ignore - Used for status display
-const errorHandlingActivated = errorHandlingConfig.get<boolean>('enableTransactions', true) && errorHandlingEnabled;
+    const errorHandlingActivated = errorHandlingConfig.get<boolean>('enableTransactions', true) && errorHandlingEnabled;
     
     // Get workspace info
     const hasWorkspace = multiProjectManager && multiProjectManager.currentWorkspace;
     const workspaceInfo = hasWorkspace ? 
-        `- Workspace: \${path.basename(multiProjectManager.currentWorkspace!.workspace)}` : 
+        `- Workspace: ${path.basename(multiProjectManager.currentWorkspace!.workspace)}` : 
         `- Workspace: None detected`;
     
     const status = [
         `Xcode Integration Status:`,
-        `- Auto sync: \${config.get<boolean>('enableAutoSync', true) ? 'Enabled' : 'Disabled'}`,
-        `- Security: \${securityEnabled ? 'Enabled' : 'Disabled'}`,
-        `- Error handling: \${errorHandlingActivated ? 'Enabled' : 'Disabled'}`,
-        `- Multi-project support: \${hasWorkspace ? 'Active' : 'Inactive'}`,
+        `- Auto sync: ${config.get<boolean>('enableAutoSync', true) ? 'Enabled' : 'Disabled'}`,
+        `- Security: ${securityEnabled ? 'Enabled' : 'Disabled'}`,
+        `- Error handling: ${errorHandlingActivated ? 'Enabled' : 'Disabled'}`,
+        `- Multi-project support: ${hasWorkspace ? 'Active' : 'Inactive'}`,
         workspaceInfo,
-        `- Last synced file: \${lastSyncFile ? path.basename(lastSyncFile) : 'N/A'}`,
-        `- Last sync time: \${lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'N/A'}`
+        `- Last synced file: ${lastSyncFile ? path.basename(lastSyncFile) : 'N/A'}`,
+        `- Last sync time: ${lastSyncTime ? lastSyncTime.toLocaleTimeString() : 'N/A'}`
     ];
     
     outputChannel.appendLine(status.join('\n'));
@@ -1652,15 +1651,11 @@ const errorHandlingActivated = errorHandlingConfig.get<boolean>('enableTransacti
 function showMenu() {
     // Get security status
     const securityConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.security');
-    // @ts-ignore
-// @ts-ignore - Used for configuration status
-const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
+    const securityEnabled = securityConfig.get<boolean>('enableSecurityChecks', true);
     
     // Get error handling status
     const errorHandlingConfig = vscode.workspace.getConfiguration('vscode-xcode-integration.errorHandling');
-    // @ts-ignore
-// @ts-ignore - Used for status display
-const errorHandlingActivated = errorHandlingConfig.get<boolean>('enableTransactions', true) && errorHandlingEnabled;
+    const errorHandlingActivated = errorHandlingConfig.get<boolean>('enableTransactions', true) && errorHandlingEnabled;
     
     // Get multi-project status
     const hasWorkspace = multiProjectManager && multiProjectManager.currentWorkspace;
@@ -1808,7 +1803,7 @@ function detectXcodeProject(outputChannel: vscode.OutputChannel) {
         const xcodeProjectPath = findProcess.stdout.trim();
         
         if (xcodeProjectPath) {
-            outputChannel.appendLine(`Found Xcode project: \${xcodeProjectPath}`);
+            outputChannel.appendLine(`Found Xcode project: ${xcodeProjectPath}`);
             return;
         }
         
@@ -1821,14 +1816,14 @@ function detectXcodeProject(outputChannel: vscode.OutputChannel) {
         const xcodeWorkspacePath = findWorkspaceProcess.stdout.trim();
         
         if (xcodeWorkspacePath) {
-            outputChannel.appendLine(`Found Xcode workspace: \${xcodeWorkspacePath}`);
+            outputChannel.appendLine(`Found Xcode workspace: ${xcodeWorkspacePath}`);
             return;
         }
         
         outputChannel.appendLine('No Xcode project or workspace found in the workspace');
         vscode.window.showWarningMessage('No Xcode project or workspace found. Some features may not work correctly.');
     } catch (err) {
-        outputChannel.appendLine(`Error detecting Xcode project: \${err}`);
+        outputChannel.appendLine(`Error detecting Xcode project: ${err}`);
     }
 }
 
@@ -1842,7 +1837,7 @@ function getScriptPath(scriptName: string): string {
     const scriptPath = path.join(workspaceFolder, 'scripts', scriptName);
     
     if (!fs.existsSync(scriptPath)) {
-        throw new Error(`Script not found: \${scriptPath}`);
+        throw new Error(`Script not found: ${scriptPath}`);
     }
     
     return scriptPath;
